@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 
 def get_app_environment() -> str:
@@ -18,3 +19,18 @@ def get_development_user_email() -> str:
 
 def get_development_user_full_name() -> str:
     return os.getenv("DEVELOPMENT_USER_FULL_NAME", "Development Recruiter")
+
+
+def get_cv_storage_path() -> Path:
+    return Path(os.getenv("CV_STORAGE_PATH", "storage/resumes")).expanduser().resolve()
+
+
+def get_max_cv_size_bytes() -> int:
+    raw_value = os.getenv("MAX_CV_SIZE_MB", "5")
+    try:
+        size_mb = float(raw_value)
+    except ValueError as exc:
+        raise RuntimeError("MAX_CV_SIZE_MB must be a positive number") from exc
+    if size_mb <= 0:
+        raise RuntimeError("MAX_CV_SIZE_MB must be a positive number")
+    return int(size_mb * 1024 * 1024)

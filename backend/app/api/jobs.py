@@ -10,6 +10,7 @@ from app.schemas.job_requirement import (
     JobRequirementResponse,
     JobRequirementUpdate,
 )
+from app.services import resume_service
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -61,7 +62,12 @@ def update_job(
 @router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_job(job_id: int, db: DatabaseSession, user: DevelopmentUser) -> Response:
     job = _get_job_or_404(db, user, job_id)
-    jobs.delete(db, job=job)
+    try:
+        resume_service.delete_job_and_resumes(db, job=job)
+    except resume_service.ResumeStorageError as exc:
+        raise HTTPException(
+            status_code=500, detail="Unable to remove stored resume files."
+        ) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -118,4 +124,3 @@ def delete_requirement(
     requirement = _get_requirement_or_404(db, job_id, requirement_id)
     job_requirements.delete(db, requirement=requirement)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-

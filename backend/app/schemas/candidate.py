@@ -4,6 +4,7 @@ from pydantic import BaseModel, EmailStr, Field, model_validator
 
 from app.models.enums import CandidateStatus
 from app.schemas.common import OrmResponse
+from app.schemas.resume import ResumeSummaryResponse
 
 
 class CandidateCreate(BaseModel):
@@ -28,11 +29,18 @@ class CandidateUpdate(BaseModel):
 class CandidateResponse(OrmResponse):
     id: int
     job_id: int
-    name: str
-    email: EmailStr
+    name: str | None
+    email: EmailStr | None
     original_filename: str | None
-    resume_path: str | None
     status: CandidateStatus
     created_at: datetime
     updated_at: datetime
 
+
+class CandidateUploadMetadata(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    email: EmailStr | None = None
+
+
+class CandidateUploadResponse(CandidateResponse):
+    resume: ResumeSummaryResponse

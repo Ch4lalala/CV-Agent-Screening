@@ -28,11 +28,15 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-recruitment_agent}:${POSTGRES_PASSWORD:-change-me-local-only}@postgres:5432/${POSTGRES_DB:-recruitment_agent}
       DEVELOPMENT_USER_EMAIL: ${DEVELOPMENT_USER_EMAIL:-developer@example.com}
       DEVELOPMENT_USER_FULL_NAME: ${DEVELOPMENT_USER_FULL_NAME:-Development Recruiter}
+      CV_STORAGE_PATH: ${CV_STORAGE_PATH:-/app/storage/resumes}
+      MAX_CV_SIZE_MB: ${MAX_CV_SIZE_MB:-5}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
+    volumes:
+      - resume_data:/app/storage/resumes
     healthcheck:
       test:
         - CMD
@@ -71,3 +75,4 @@ services:
 
 volumes:
   postgres_data:
+  resume_data:

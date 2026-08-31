@@ -14,7 +14,7 @@ def test_candidate_create_list_get_update_delete(client: TestClient) -> None:
     candidate_id = candidate["id"]
     assert candidate["status"] == "uploaded"
     assert candidate["original_filename"] is None
-    assert candidate["resume_path"] is None
+    assert "resume_path" not in candidate
 
     listed = client.get(f"/api/v1/jobs/{job_id}/candidates")
     assert listed.status_code == 200

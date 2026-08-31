@@ -1,5 +1,6 @@
 import os
 from collections.abc import Generator
+from pathlib import Path
 
 os.environ["APP_ENV"] = "test"
 
@@ -14,6 +15,14 @@ from app.database.base import Base
 from app.database.session import get_db
 from app.main import app
 from app.models import User
+
+
+@pytest.fixture(autouse=True)
+def resume_storage_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    storage_path = tmp_path / "resumes"
+    monkeypatch.setenv("CV_STORAGE_PATH", str(storage_path))
+    monkeypatch.setenv("MAX_CV_SIZE_MB", "5")
+    return storage_path
 
 
 @pytest.fixture

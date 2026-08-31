@@ -19,6 +19,11 @@ class CandidateStatus(str, Enum):
     FAILED = "failed"
 
 
+class ResumeExtractionStatus(str, Enum):
+    PENDING = "pending"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 def enum_values(enum_class: type[Enum]) -> list[str]:
     return [item.value for item in enum_class]
-

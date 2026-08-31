@@ -9,6 +9,7 @@ from app.models.enums import CandidateStatus, enum_values
 
 if TYPE_CHECKING:
     from app.models.job import Job
+    from app.models.resume_document import ResumeDocument
 
 
 class Candidate(Base):
@@ -18,8 +19,8 @@ class Candidate(Base):
     job_id: Mapped[int] = mapped_column(
         ForeignKey("jobs.id", ondelete="CASCADE"), index=True
     )
-    name: Mapped[str] = mapped_column(String(255))
-    email: Mapped[str] = mapped_column(String(320), index=True)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(320), index=True, nullable=True)
     original_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     resume_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     status: Mapped[CandidateStatus] = mapped_column(
@@ -41,4 +42,10 @@ class Candidate(Base):
     )
 
     job: Mapped["Job"] = relationship(back_populates="candidates")
+    resume_document: Mapped["ResumeDocument | None"] = relationship(
+        back_populates="candidate",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        uselist=False,
+    )
 
