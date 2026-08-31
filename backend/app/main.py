@@ -1,13 +1,37 @@
-from fastapi import FastAPI
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import SQLAlchemyError
+
+from app.api.router import api_router
+from app.services.development_user import seed_development_user
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    seed_development_user()
+    yield
 
 app = FastAPI(
     title="Evidence-Grounded Recruitment Agent API",
-    version="0.1.0",
+    version="0.2.0",
+    lifespan=lifespan,
 )
+
+app.include_router(api_router)
+
+
+@app.exception_handler(SQLAlchemyError)
+async def database_error_handler(_: Request, __: SQLAlchemyError) -> JSONResponse:
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "A database operation failed"},
+    )
 
 
 @app.get("/health", tags=["system"])
 async def health() -> dict[str, str]:
     """Report whether the API process is available."""
     return {"status": "healthy"}
-

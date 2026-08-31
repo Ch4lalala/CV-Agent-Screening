@@ -26,6 +26,8 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-development}
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-recruitment_agent}:${POSTGRES_PASSWORD:-change-me-local-only}@postgres:5432/${POSTGRES_DB:-recruitment_agent}
+      DEVELOPMENT_USER_EMAIL: ${DEVELOPMENT_USER_EMAIL:-developer@example.com}
+      DEVELOPMENT_USER_FULL_NAME: ${DEVELOPMENT_USER_FULL_NAME:-Development Recruiter}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     depends_on:
