@@ -1,0 +1,20 @@
+.env
+.DS_Store
+prd.md 
+
+# Frontend
+frontend/.next/
+frontend/node_modules/
+frontend/out/
+frontend/npm-debug.log*
+frontend/*.tsbuildinfo
+
+# Backend
+backend/.pytest_cache/
+backend/.venv/
+backend/**/__pycache__/
+backend/**/*.py[cod]
+
+# Editors
+.idea/
+.vscode/
