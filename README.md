@@ -1,6 +1,6 @@
 # Evidence-Grounded Recruitment Agent
 
-Phase 3 provides the lightweight application, persistence, and secure resume-ingestion foundation described in the PRD:
+Phase 4 provides the lightweight application, persistence, secure resume-ingestion, and centralized AI integration foundation described in the PRD:
 
 - Next.js and TypeScript frontend
 - FastAPI backend with `GET /health`
@@ -9,9 +9,11 @@ Phase 3 provides the lightweight application, persistence, and secure resume-ing
 - REST CRUD APIs for jobs, job requirements, and candidate metadata
 - Secure PDF upload with UUID filenames and PyMuPDF text extraction
 - Persistent resume metadata and Docker-managed file storage
+- Lazy, provider-agnostic AI client for OpenAI-compatible endpoints
+- Pydantic-validated structured AI output with a bounded fallback
 - Dockerfiles and Docker Compose orchestration
 
-Authentication, AI-based resume parsing, screening, and LangGraph workflows are intentionally not part of this phase.
+Authentication, AI-based resume parsing, screening, recruitment prompts, and LangGraph workflows are intentionally not part of this phase.
 
 ## Prerequisites
 
@@ -26,7 +28,7 @@ Authentication, AI-based resume parsing, screening, and LangGraph workflows are 
    cp .env.example .env
    ```
 
-2. Replace `POSTGRES_PASSWORD` in `.env` with a strong local value. Do not commit `.env`. The `DEVELOPMENT_USER_*` values identify the temporary recruiter used until authentication is implemented. `MAX_CV_SIZE_MB` defaults to `5`.
+2. Replace `POSTGRES_PASSWORD` in `.env` with a strong local value. Do not commit `.env`. The `DEVELOPMENT_USER_*` values identify the temporary recruiter used until authentication is implemented. `MAX_CV_SIZE_MB` defaults to `5`. AI values may remain empty when working on non-AI features.
 
 3. Build and start all services. The backend applies pending Alembic migrations before starting FastAPI:
 
@@ -77,6 +79,39 @@ All resource endpoints resolve ownership through one temporary dependency in `ba
 
 The development seed is disabled when `APP_ENV` is not `development`.
 
+## Optional AI provider configuration
+
+All model access is centralized in `backend/app/ai`. The integration uses LangChain's `ChatOpenAI` adapter and expects an OpenAI-compatible chat endpoint. Future services should use `AIClient` rather than construct provider clients directly.
+
+Configure the provider in `.env` only when an AI call is needed:
+
+```env
+AI_API_KEY=replace-with-provider-api-key
+AI_BASE_URL=https://provider.example/v1
+AI_MODEL=replace-with-model-id
+AI_TIMEOUT_SECONDS=60
+AI_MAX_RETRIES=2
+AI_TEMPERATURE=0
+```
+
+- `AI_API_KEY` and `AI_MODEL` are required only for AI calls.
+- `AI_BASE_URL` is optional; leave it empty to use the adapter's default OpenAI endpoint.
+- `AI_TIMEOUT_SECONDS` limits each provider attempt and defaults to `60`.
+- `AI_MAX_RETRIES` controls the adapter's bounded retry count and defaults to `2`.
+- `AI_TEMPERATURE` defaults to `0` for deterministic structured responses.
+
+The backend, database APIs, PDF ingestion, and `GET /health` start and work without AI credentials. This allows the development provider to be replaced later by the organizer model through environment changes only.
+
+The explicit connectivity endpoint makes one small model request and validates it with the internal `AIHealthResponse` Pydantic schema:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/ai/test
+```
+
+A successful response includes `status`, `model`, and a short `message`. Missing `AI_API_KEY` or `AI_MODEL` returns a clear `503` without affecting other endpoints. Provider and parsing failures return sanitized errors; API keys, prompts, and raw model responses are not logged or returned.
+
+Structured calls prefer native function calling. If an adapter does not implement it, or an OpenAI-compatible endpoint reports the native request shape as unsupported, the client makes one plain JSON request and validates that response with the same Pydantic schema. There are no repair loops.
+
 ## Application API
 
 All resource endpoints use the `/api/v1` prefix.
@@ -98,6 +133,7 @@ All resource endpoints use the `/api/v1` prefix.
 | `GET` | `/api/v1/candidates/{candidate_id}/resume` | Get extraction metadata without resume text |
 | `PATCH` | `/api/v1/candidates/{candidate_id}` | Update candidate metadata |
 | `DELETE` | `/api/v1/candidates/{candidate_id}` | Delete candidate metadata |
+| `POST` | `/api/v1/ai/test` | Explicitly test optional AI configuration and structured output |
 
 The candidate endpoint uses `multipart/form-data` for Phase 3 uploads. The existing Phase 2 JSON metadata request remains supported for backward compatibility, but multipart PDF upload is the primary contract.
 
