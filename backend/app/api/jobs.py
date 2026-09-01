@@ -1,6 +1,15 @@
-from fastapi import APIRouter, HTTPException, Response, status
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from starlette.datastructures import UploadFile
 
 from app.api.dependencies import DatabaseSession, DevelopmentUser
+from app.ai.client import AIClient, get_ai_client
+from app.ai.exceptions import (
+    AIConfigurationError,
+    AIProviderError,
+    AIStructuredOutputError,
+)
 from app.models.job import Job
 from app.models.job_requirement import JobRequirement
 from app.repositories import job_requirements, jobs
@@ -10,9 +19,11 @@ from app.schemas.job_requirement import (
     JobRequirementResponse,
     JobRequirementUpdate,
 )
-from app.services import resume_service
+from app.schemas.job_import import JobImportDraft
+from app.services import job_document_service, resume_service
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+AIClientDependency = Annotated[AIClient, Depends(get_ai_client)]
 
 
 def _get_job_or_404(db: DatabaseSession, user: DevelopmentUser, job_id: int) -> Job:
@@ -44,6 +55,57 @@ def create_job(data: JobCreate, db: DatabaseSession, user: DevelopmentUser) -> J
 @router.get("", response_model=list[JobResponse])
 def list_jobs(db: DatabaseSession, user: DevelopmentUser) -> list[Job]:
     return jobs.list_for_user(db, user_id=user.id)
+
+
+@router.post("/import", response_model=JobImportDraft)
+async def import_job_document(
+    request: Request,
+    _: DevelopmentUser,
+    ai_client: AIClientDependency,
+) -> JobImportDraft:
+    content_type = request.headers.get("content-type", "").lower()
+    if not content_type.startswith("multipart/form-data"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Upload a job document using multipart/form-data.",
+        )
+    form = await request.form()
+    upload = form.get("file")
+    if not isinstance(upload, UploadFile):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="A PDF, DOCX, or TXT job document is required.",
+        )
+    try:
+        return await job_document_service.import_job_document(
+            upload,
+            ai_client=ai_client,
+        )
+    except job_document_service.UnsupportedJobDocumentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except job_document_service.InvalidJobDocumentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except job_document_service.JobDocumentTooLargeError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except job_document_service.NoReadableJobDocumentTextError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except AIConfigurationError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="AI service is not configured.",
+        ) from exc
+    except (AIProviderError, AIStructuredOutputError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="AI service is temporarily unavailable.",
+        ) from exc
+    except job_document_service.JobDocumentProcessingError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to process the job document.",
+        ) from exc
+    finally:
+        await upload.close()
 
 
 @router.get("/{job_id}", response_model=JobResponse)

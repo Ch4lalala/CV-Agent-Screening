@@ -35,11 +35,19 @@ def get_cv_storage_path() -> Path:
 
 
 def get_max_cv_size_bytes() -> int:
-    raw_value = os.getenv("MAX_CV_SIZE_MB", "5")
+    return _positive_megabytes("MAX_CV_SIZE_MB", 5)
+
+
+def get_max_job_document_size_bytes() -> int:
+    return _positive_megabytes("MAX_JOB_DOCUMENT_SIZE_MB", 5)
+
+
+def _positive_megabytes(name: str, default: float) -> int:
+    raw_value = os.getenv(name, str(default))
     try:
         size_mb = float(raw_value)
     except ValueError as exc:
-        raise RuntimeError("MAX_CV_SIZE_MB must be a positive number") from exc
+        raise RuntimeError(f"{name} must be a positive number") from exc
     if size_mb <= 0:
-        raise RuntimeError("MAX_CV_SIZE_MB must be a positive number")
+        raise RuntimeError(f"{name} must be a positive number")
     return int(size_mb * 1024 * 1024)

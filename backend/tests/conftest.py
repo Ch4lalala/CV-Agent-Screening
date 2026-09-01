@@ -22,6 +22,7 @@ def resume_storage_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
     storage_path = tmp_path / "resumes"
     monkeypatch.setenv("CV_STORAGE_PATH", str(storage_path))
     monkeypatch.setenv("MAX_CV_SIZE_MB", "5")
+    monkeypatch.setenv("MAX_JOB_DOCUMENT_SIZE_MB", "5")
     return storage_path
 
 

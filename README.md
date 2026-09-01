@@ -1,12 +1,14 @@
 # Evidence-Grounded Recruitment Agent
 
-Phase 7 provides the lightweight application, secure resume ingestion, evidence-grounded recruitment graph, persistent candidate reports, and recruiter-facing workflow described in the PRD:
+Phase 7.5 provides the lightweight application, secure document ingestion, evidence-grounded recruitment graph, persistent candidate reports, and recruiter-facing workflow described in the PRD:
 
 - Responsive Next.js and TypeScript recruiter workspace
 - FastAPI backend with `GET /health`
 - PostgreSQL database
 - SQLAlchemy 2.x models and Alembic migrations
 - REST CRUD APIs for jobs, job requirements, and candidate metadata
+- Temporary PDF, DOCX, and TXT job-document import with AI-generated vacancy drafts
+- Deterministic atomic-requirement validation, conservative deduplication, and recruiter warnings
 - Secure PDF upload with UUID filenames and PyMuPDF text extraction
 - Persistent resume metadata and Docker-managed file storage
 - Lazy, provider-agnostic AI client for OpenAI-compatible endpoints
@@ -19,7 +21,7 @@ Phase 7 provides the lightweight application, secure resume ingestion, evidence-
 - Evidence-first candidate reports with coverage, citations, verification flags, interview questions, profile context, and screening history
 - Dockerfiles and Docker Compose orchestration
 
-Authentication, prompt-injection detection, privacy filtering, GitHub verification, and autonomous hiring decisions are intentionally not part of this phase. The UI never presents an overall candidate score or hiring recommendation; recruiters remain responsible for interpreting the evidence.
+Authentication, Phase 8 prompt-injection detection, resume privacy filtering, GitHub verification, and autonomous hiring decisions are intentionally not part of this phase. Job-document prompts defensively treat source content as untrusted data, but this is not presented as prompt-injection detection. The UI never presents an overall candidate score or hiring recommendation; recruiters remain responsible for interpreting the evidence.
 
 ## Prerequisites
 
@@ -34,7 +36,7 @@ Authentication, prompt-injection detection, privacy filtering, GitHub verificati
    cp .env.example .env
    ```
 
-2. Replace `POSTGRES_PASSWORD` in `.env` with a strong local value. Do not commit `.env`. The `DEVELOPMENT_USER_*` values identify the temporary recruiter used until authentication is implemented. `MAX_CV_SIZE_MB` defaults to `5`. `CORS_ORIGINS` is a comma-separated allowlist for browser origins and defaults to the local frontend. AI values may remain empty when working on non-AI features.
+2. Replace `POSTGRES_PASSWORD` in `.env` with a strong local value. Do not commit `.env`. The `DEVELOPMENT_USER_*` values identify the temporary recruiter used until authentication is implemented. `MAX_CV_SIZE_MB` and `MAX_JOB_DOCUMENT_SIZE_MB` both default to `5`. `CORS_ORIGINS` is a comma-separated allowlist for browser origins and defaults to the local frontend. AI values may remain empty when working on non-AI features.
 
 3. Build and start all services. The backend applies pending Alembic migrations before starting FastAPI:
 
@@ -57,7 +59,7 @@ Authentication, prompt-injection detection, privacy filtering, GitHub verificati
 
 5. Open the frontend at [http://localhost:3000](http://localhost:3000). FastAPI documentation is available at [http://localhost:8000/docs](http://localhost:8000/docs).
 
-The recruiter workflow starts at `/dashboard`: create a job, define required or preferred requirements, upload one or more PDF resumes, and screen a ready candidate. Screening is synchronous, so the UI displays a truthful in-progress overlay until the API responds. Missing AI configuration and provider failures are shown as recoverable errors; the job and uploaded candidate remain available.
+The recruiter workflow starts at `/dashboard`: create a job manually or import an editable draft from a job document, confirm required or preferred requirements, upload one or more PDF resumes, and screen a ready candidate. Screening is synchronous, so the UI displays a truthful in-progress overlay until the API responds. Missing AI configuration and provider failures are shown as recoverable errors; manually entered data and uploaded candidates remain available.
 
 Verify or manually apply the current migration inside Docker with:
 
@@ -109,6 +111,23 @@ The principal routes are:
 - `/candidates/{candidateId}/screenings/{runId}` — immutable historical report
 
 The report clearly separates required and preferred coverage and shows text labels for `supported`, `partial`, and `no evidence`. Evidence quotations retain their source and page when available, uncertain items are collected under “Needs verification,” and generated interview questions can be copied but are never sent automatically. Candidate profile data is secondary context rather than proof of a requirement.
+
+## Job-document import
+
+On `/jobs/new`, choose **Upload job document** to submit a PDF, DOCX, or TXT file up to `MAX_JOB_DOCUMENT_SIZE_MB` (5 MB by default). Image-only PDFs, OCR, spreadsheets, presentations, and images are not supported. The backend validates the extension, MIME type, file signature where practical, and size before extracting text.
+
+The source document is written under an operating-system temporary directory using a UUID filename. It is deleted after the AI response or any failure and is never stored in PostgreSQL or the resume volume. Extracted job text is sent to the configured external AI provider for one structured draft call; one bounded retry is allowed for invalid or obviously composite output.
+
+The import endpoint returns only an editable draft. It does not create a Job:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/jobs/import \
+  -F 'file=@./vacancy.docx;type=application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+```
+
+The backend requests one independently verifiable qualification per requirement. A deterministic pass splits only obvious lists of known technologies, normalizes conservative aliases such as Postgres/PostgreSQL, consolidates duplicates, excludes vague or personal criteria, and flags ambiguous composites rather than guessing. Warnings are advisory and do not make legal conclusions.
+
+The frontend requires recruiter review of the generated title, description, requirement names, descriptions, and required/preferred types. Only **Confirm & create vacancy** invokes the existing Job and JobRequirement CRUD APIs. Once saved, imported requirements are ordinary recruiter-authoritative requirements and use the same candidate screening path as manually created jobs. Import never starts screening automatically.
 
 ## Optional AI provider configuration
 
@@ -193,6 +212,7 @@ All resource endpoints use the `/api/v1` prefix.
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
 | `POST` | `/api/v1/jobs` | Create a job for the development user |
+| `POST` | `/api/v1/jobs/import` | Extract a temporary job document and return an editable AI draft without persistence |
 | `GET` | `/api/v1/jobs` | List the user's jobs |
 | `GET` | `/api/v1/jobs/{job_id}` | Get a job |
 | `PATCH` | `/api/v1/jobs/{job_id}` | Update a job |

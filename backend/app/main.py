@@ -19,7 +19,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="Evidence-Grounded Recruitment Agent API",
-    version="0.7.0",
+    version="0.7.5",
     lifespan=lifespan,
 )
 

@@ -4,6 +4,7 @@ import type {
   CandidateUploadResponse,
   Job,
   JobCreateInput,
+  JobImportDraft,
   JobRequirement,
   JobUpdateInput,
   RequirementInput,
@@ -108,7 +109,7 @@ export function getErrorMessage(error: unknown, fallback: string): string {
     return error.detail ?? "This action conflicts with the current resource state.";
   }
   if (error.status === 413) {
-    return "This CV exceeds the maximum allowed file size of 5 MB.";
+    return error.detail ?? "The uploaded file exceeds the configured maximum size.";
   }
   if (error.status === 503) {
     return "AI service is not configured or temporarily unavailable.";
@@ -123,6 +124,15 @@ export const getJobs = () => request<Job[]>("/api/v1/jobs");
 
 export const createJob = (data: JobCreateInput) =>
   request<Job>("/api/v1/jobs", jsonRequest("POST", data));
+
+export async function importJobDocument(file: File): Promise<JobImportDraft> {
+  const form = new FormData();
+  form.append("file", file);
+  return request<JobImportDraft>("/api/v1/jobs/import", {
+    method: "POST",
+    body: form,
+  });
+}
 
 export const getJob = (jobId: number) => request<Job>(`/api/v1/jobs/${jobId}`);
 

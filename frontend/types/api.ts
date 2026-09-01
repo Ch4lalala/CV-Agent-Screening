@@ -45,6 +45,33 @@ export interface RequirementInput {
   priority?: number | null;
 }
 
+export type JobImportWarningType =
+  | "ambiguous_requirement"
+  | "excluded_personal_criterion"
+  | "composite_requirement"
+  | "duplicate_requirement"
+  | "inferred_title"
+  | "review_required";
+
+export interface GeneratedJobRequirement {
+  name: string;
+  description: string | null;
+  type: RequirementType;
+}
+
+export interface JobImportWarning {
+  type: JobImportWarningType;
+  message: string;
+  related_text: string | null;
+}
+
+export interface JobImportDraft {
+  title: string | null;
+  description: string;
+  requirements: GeneratedJobRequirement[];
+  warnings: JobImportWarning[];
+}
+
 export interface Candidate {
   id: number;
   job_id: number;

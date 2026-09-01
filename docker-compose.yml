@@ -31,6 +31,7 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       CV_STORAGE_PATH: ${CV_STORAGE_PATH:-/app/storage/resumes}
       MAX_CV_SIZE_MB: ${MAX_CV_SIZE_MB:-5}
+      MAX_JOB_DOCUMENT_SIZE_MB: ${MAX_JOB_DOCUMENT_SIZE_MB:-5}
       AI_API_KEY: ${AI_API_KEY:-}
       AI_BASE_URL: ${AI_BASE_URL:-}
       AI_MODEL: ${AI_MODEL:-}
