@@ -1,6 +1,6 @@
 # Evidence-Grounded Recruitment Agent
 
-Phase 4 provides the lightweight application, persistence, secure resume-ingestion, and centralized AI integration foundation described in the PRD:
+Phase 5 provides the lightweight application, persistence, secure resume ingestion, and core evidence-grounded recruitment agent described in the PRD:
 
 - Next.js and TypeScript frontend
 - FastAPI backend with `GET /health`
@@ -11,9 +11,11 @@ Phase 4 provides the lightweight application, persistence, secure resume-ingesti
 - Persistent resume metadata and Docker-managed file storage
 - Lazy, provider-agnostic AI client for OpenAI-compatible endpoints
 - Pydantic-validated structured AI output with a bounded fallback
+- In-process LangGraph workflow for non-persistent candidate screening
+- Deterministic evidence-quote verification, uncertainty grouping, and coverage
 - Dockerfiles and Docker Compose orchestration
 
-Authentication, AI-based resume parsing, screening, recruitment prompts, and LangGraph workflows are intentionally not part of this phase.
+Screening-result persistence, authentication, prompt-injection detection, privacy filtering, GitHub verification, autonomous decisions, and report UI are intentionally not part of this phase.
 
 ## Prerequisites
 
@@ -112,6 +114,37 @@ A successful response includes `status`, `model`, and a short `message`. Missing
 
 Structured calls prefer native function calling. If an adapter does not implement it, or an OpenAI-compatible endpoint reports the native request shape as unsupported, the client makes one plain JSON request and validates that response with the same Pydantic schema. There are no repair loops.
 
+## Core recruitment graph
+
+LangGraph runs inside the FastAPI backend; it is not a separate service. The Phase 5 graph executes:
+
+```text
+normalize_requirements
+  -> extract_candidate_profile
+  -> match_evidence
+  -> analyze_uncertainty
+  -> generate_interview_questions
+  -> generate_report
+```
+
+The normal provider path has four batched model operations: one each for requirement normalization, candidate extraction, all requirement evidence, and targeted interview questions. The interview operation is skipped when there are no uncertainties, and evidence analysis is skipped when no requirements were produced. As documented above, an operation may make one compatibility fallback call if the provider rejects native structured output.
+
+Recruiter-defined requirements remain authoritative. The response keeps the original recruiter name and description alongside any conservative normalization, and AI-derived requirements are accepted only when the job has no manual requirements.
+
+Evidence quotes are retained only when an exact equivalent exists in the extracted resume after conservative Unicode, whitespace, and case normalization with word boundaries. Unsupported quotes are discarded and the assessment is downgraded. Candidate-provided GitHub and portfolio URLs are retained only when they occur in the resume; they are not visited or verified.
+
+The graph treats resume content as untrusted data and explicitly instructs the model not to follow document instructions. Phase 5 does not claim prompt-injection detection; that remains a later phase.
+
+Run a temporary, non-persistent screening with:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/candidates/1/screen
+```
+
+The endpoint requires a successfully extracted resume and configured AI provider. It returns transparent required/preferred coverage, individual evidence assessments, uncertainty, and up to five targeted questions. It never returns a hiring recommendation or black-box match score.
+
+Screening sends the job data and extracted resume text to the configured external AI provider. The report is returned directly and is not stored, and `Candidate.status` remains unchanged until Phase 6 introduces screening-run persistence. Missing inputs return `404`, an incomplete extraction returns `409`, and missing or unavailable AI returns a sanitized `503`.
+
 ## Application API
 
 All resource endpoints use the `/api/v1` prefix.
@@ -133,6 +166,7 @@ All resource endpoints use the `/api/v1` prefix.
 | `GET` | `/api/v1/candidates/{candidate_id}/resume` | Get extraction metadata without resume text |
 | `PATCH` | `/api/v1/candidates/{candidate_id}` | Update candidate metadata |
 | `DELETE` | `/api/v1/candidates/{candidate_id}` | Delete candidate metadata |
+| `POST` | `/api/v1/candidates/{candidate_id}/screen` | Run the non-persistent LangGraph screening workflow |
 | `POST` | `/api/v1/ai/test` | Explicitly test optional AI configuration and structured output |
 
 The candidate endpoint uses `multipart/form-data` for Phase 3 uploads. The existing Phase 2 JSON metadata request remains supported for backward compatibility, but multipart PDF upload is the primary contract.
