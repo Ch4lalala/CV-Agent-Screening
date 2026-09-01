@@ -1,0 +1,180 @@
+export type JobStatus = "draft" | "active" | "closed";
+export type RequirementType = "required" | "preferred";
+export type CandidateStatus = "uploaded" | "processing" | "completed" | "failed";
+export type ResumeExtractionStatus = "pending" | "completed" | "failed";
+export type ScreeningRunStatus = "pending" | "processing" | "completed" | "failed";
+export type EvidenceStatus = "supported" | "partial" | "no_evidence";
+export type EvidenceConfidence = "high" | "medium" | "low";
+
+export interface Job {
+  id: number;
+  user_id: number;
+  title: string;
+  description: string;
+  status: JobStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface JobCreateInput {
+  title: string;
+  description: string;
+  status?: JobStatus;
+}
+
+export interface JobUpdateInput {
+  title?: string;
+  description?: string;
+  status?: JobStatus;
+}
+
+export interface JobRequirement {
+  id: number;
+  job_id: number;
+  name: string;
+  description: string | null;
+  requirement_type: RequirementType;
+  priority: number | null;
+  created_at: string;
+}
+
+export interface RequirementInput {
+  name: string;
+  description?: string | null;
+  requirement_type: RequirementType;
+  priority?: number | null;
+}
+
+export interface Candidate {
+  id: number;
+  job_id: number;
+  name: string | null;
+  email: string | null;
+  original_filename: string | null;
+  status: CandidateStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ResumeMetadata {
+  original_filename: string;
+  page_count: number;
+  extraction_status: ResumeExtractionStatus;
+  text_length: number;
+  message: string | null;
+}
+
+export interface ResumeSummary {
+  page_count: number;
+  extraction_status: ResumeExtractionStatus;
+  text_length: number;
+  message: string | null;
+}
+
+export interface CandidateUploadResponse extends Candidate {
+  resume: ResumeSummary;
+}
+
+export interface ScreeningRun {
+  id: number;
+  status: ScreeningRunStatus;
+  model_name: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  error_message: string | null;
+  created_at: string;
+}
+
+export interface Coverage {
+  supported: number;
+  total: number;
+}
+
+export interface EvidenceItem {
+  id: number;
+  quote: string;
+  source_section: string | null;
+  source_page: number | null;
+  created_at: string;
+}
+
+export interface EvidenceResult {
+  id: number;
+  requirement_id: number | null;
+  requirement_name: string;
+  requirement_type: RequirementType;
+  status: EvidenceStatus;
+  confidence: EvidenceConfidence;
+  explanation: string;
+  needs_human_verification: boolean;
+  evidence_items: EvidenceItem[];
+  created_at: string;
+}
+
+export interface InterviewQuestion {
+  id: number;
+  requirement_name: string | null;
+  question: string;
+  created_at: string;
+}
+
+export interface CandidateExperience {
+  role: string | null;
+  company: string | null;
+  period: string | null;
+  description: string[];
+}
+
+export interface CandidateEducation {
+  institution: string | null;
+  qualification: string | null;
+  field_of_study: string | null;
+  period: string | null;
+}
+
+export interface CandidateProject {
+  name: string | null;
+  description: string[];
+  technologies: string[];
+  url: string | null;
+}
+
+export interface CandidateProfile {
+  candidate_name: string | null;
+  email: string | null;
+  phone: string | null;
+  skills: string[];
+  work_experience: CandidateExperience[];
+  education: CandidateEducation[];
+  projects: CandidateProject[];
+  certifications: string[];
+  github_urls: string[];
+  portfolio_urls: string[];
+}
+
+export interface NormalizedRequirement {
+  source_requirement_id: number | null;
+  name: string;
+  description: string | null;
+  requirement_type: RequirementType;
+  source: "recruiter" | "ai_derived";
+  priority: number | null;
+  recruiter_name: string | null;
+  recruiter_description: string | null;
+}
+
+export interface CandidateReport {
+  screening_run: ScreeningRun;
+  candidate: Pick<Candidate, "id" | "name" | "email" | "status">;
+  job_title: string;
+  normalized_requirements: NormalizedRequirement[];
+  candidate_profile: CandidateProfile;
+  coverage: {
+    required: Coverage;
+    preferred: Coverage;
+  };
+  evidence_results: EvidenceResult[];
+  needs_verification: string[];
+  interview_questions: InterviewQuestion[];
+  security_warning: null;
+}

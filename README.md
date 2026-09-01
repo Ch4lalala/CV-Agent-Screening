@@ -1,8 +1,8 @@
 # Evidence-Grounded Recruitment Agent
 
-Phase 6 provides the lightweight application, secure resume ingestion, evidence-grounded recruitment graph, and persistent candidate reports described in the PRD:
+Phase 7 provides the lightweight application, secure resume ingestion, evidence-grounded recruitment graph, persistent candidate reports, and recruiter-facing workflow described in the PRD:
 
-- Next.js and TypeScript frontend
+- Responsive Next.js and TypeScript recruiter workspace
 - FastAPI backend with `GET /health`
 - PostgreSQL database
 - SQLAlchemy 2.x models and Alembic migrations
@@ -15,9 +15,11 @@ Phase 6 provides the lightweight application, secure resume ingestion, evidence-
 - Deterministic evidence-quote verification, uncertainty grouping, and coverage
 - Normalized candidate profiles, evidence, citations, and interview questions
 - Latest-report, run-history, and specific-run APIs
+- Dashboard, job setup, requirement management, PDF upload, and candidate workflow
+- Evidence-first candidate reports with coverage, citations, verification flags, interview questions, profile context, and screening history
 - Dockerfiles and Docker Compose orchestration
 
-Authentication, prompt-injection detection, privacy filtering, GitHub verification, autonomous decisions, and report UI are intentionally not part of this phase.
+Authentication, prompt-injection detection, privacy filtering, GitHub verification, and autonomous hiring decisions are intentionally not part of this phase. The UI never presents an overall candidate score or hiring recommendation; recruiters remain responsible for interpreting the evidence.
 
 ## Prerequisites
 
@@ -32,7 +34,7 @@ Authentication, prompt-injection detection, privacy filtering, GitHub verificati
    cp .env.example .env
    ```
 
-2. Replace `POSTGRES_PASSWORD` in `.env` with a strong local value. Do not commit `.env`. The `DEVELOPMENT_USER_*` values identify the temporary recruiter used until authentication is implemented. `MAX_CV_SIZE_MB` defaults to `5`. AI values may remain empty when working on non-AI features.
+2. Replace `POSTGRES_PASSWORD` in `.env` with a strong local value. Do not commit `.env`. The `DEVELOPMENT_USER_*` values identify the temporary recruiter used until authentication is implemented. `MAX_CV_SIZE_MB` defaults to `5`. `CORS_ORIGINS` is a comma-separated allowlist for browser origins and defaults to the local frontend. AI values may remain empty when working on non-AI features.
 
 3. Build and start all services. The backend applies pending Alembic migrations before starting FastAPI:
 
@@ -54,6 +56,8 @@ Authentication, prompt-injection detection, privacy filtering, GitHub verificati
    ```
 
 5. Open the frontend at [http://localhost:3000](http://localhost:3000). FastAPI documentation is available at [http://localhost:8000/docs](http://localhost:8000/docs).
+
+The recruiter workflow starts at `/dashboard`: create a job, define required or preferred requirements, upload one or more PDF resumes, and screen a ready candidate. Screening is synchronous, so the UI displays a truthful in-progress overlay until the API responds. Missing AI configuration and provider failures are shown as recoverable errors; the job and uploaded candidate remain available.
 
 Verify or manually apply the current migration inside Docker with:
 
@@ -82,6 +86,29 @@ Authentication is deliberately deferred. In `APP_ENV=development`, startup creat
 All resource endpoints resolve ownership through one temporary dependency in `backend/app/services/development_user.py`. The user has a non-authenticating password marker, no credentials are accepted by the API, and `password_hash` is never included in responses. This dependency is intended to be replaced by real authentication later.
 
 The development seed is disabled when `APP_ENV` is not `development`.
+
+## Frontend development
+
+For a frontend process running outside Docker, configure the browser-visible backend URL and start Next.js:
+
+```bash
+cd frontend
+cp .env.example .env.local
+npm ci
+npm run dev
+```
+
+The default `frontend/.env.example` points to `http://localhost:8000`. `NEXT_PUBLIC_API_URL` is the only frontend API setting and must be reachable by the browser. Browser requests are centralized in `frontend/lib/api/client.ts`; secrets and server-only provider settings must never use the `NEXT_PUBLIC_` prefix.
+
+The principal routes are:
+
+- `/dashboard` — job overview and aggregate candidate status
+- `/jobs/new` — create a job
+- `/jobs/{jobId}` — edit job status, manage requirements, upload PDFs, and screen candidates
+- `/candidates/{candidateId}` — latest evidence report and screening history
+- `/candidates/{candidateId}/screenings/{runId}` — immutable historical report
+
+The report clearly separates required and preferred coverage and shows text labels for `supported`, `partial`, and `no evidence`. Evidence quotations retain their source and page when available, uncertain items are collected under “Needs verification,” and generated interview questions can be copied but are never sent automatically. Candidate profile data is secondary context rather than proof of a requirement.
 
 ## Optional AI provider configuration
 
@@ -280,10 +307,10 @@ npm run build
 
 | Service | Default address | Purpose |
 | --- | --- | --- |
-| Frontend | `http://localhost:3000` | Next.js application shell |
+| Frontend | `http://localhost:3000` | Next.js recruiter workspace |
 | Backend | `http://localhost:8000` | FastAPI application API |
 | PostgreSQL | `postgres:5432` (Compose network only) | Persistent database service |
 
 The backend's `/app/storage/resumes` directory is backed by the `resume_data` Docker volume.
 
-Frontend and backend host ports can be changed in `.env`. PostgreSQL is intentionally not published to the host; the backend reaches it at `postgres:5432` on the private Compose network. `NEXT_PUBLIC_API_URL` is embedded into the frontend during the Docker image build and should be the browser-accessible backend URL.
+Frontend and backend host ports can be changed in `.env`. PostgreSQL is intentionally not published to the host; the backend reaches it at `postgres:5432` on the private Compose network. `NEXT_PUBLIC_API_URL` is embedded into the frontend during the Docker image build and should be the browser-accessible backend URL. When the frontend origin changes, add that exact origin to the comma-separated `CORS_ORIGINS` value and rebuild/restart the backend.

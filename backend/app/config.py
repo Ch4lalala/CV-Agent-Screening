@@ -13,6 +13,15 @@ def get_database_url() -> str:
     )
 
 
+def get_cors_origins() -> list[str]:
+    raw_value = os.getenv("CORS_ORIGINS", "http://localhost:3000")
+    return [
+        origin.strip().rstrip("/")
+        for origin in raw_value.split(",")
+        if origin.strip()
+    ]
+
+
 def get_development_user_email() -> str:
     return os.getenv("DEVELOPMENT_USER_EMAIL", "developer@example.com")
 
