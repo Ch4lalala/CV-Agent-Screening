@@ -8,6 +8,7 @@ Phase 7.5 provides the lightweight application, secure document ingestion, evide
 - SQLAlchemy 2.x models and Alembic migrations
 - REST CRUD APIs for jobs, job requirements, and candidate metadata
 - Temporary PDF, DOCX, and TXT job-document import with AI-generated vacancy drafts
+- AI-generated qualification drafts from manually written job descriptions
 - Deterministic atomic-requirement validation, conservative deduplication, and recruiter warnings
 - Secure PDF upload with UUID filenames and PyMuPDF text extraction
 - Persistent resume metadata and Docker-managed file storage
@@ -59,7 +60,7 @@ Authentication, Phase 8 prompt-injection detection, resume privacy filtering, Gi
 
 5. Open the frontend at [http://localhost:3000](http://localhost:3000). FastAPI documentation is available at [http://localhost:8000/docs](http://localhost:8000/docs).
 
-The recruiter workflow starts at `/dashboard`: create a job manually or import an editable draft from a job document, confirm required or preferred requirements, upload one or more PDF resumes, and screen a ready candidate. Screening is synchronous, so the UI displays a truthful in-progress overlay until the API responds. Missing AI configuration and provider failures are shown as recoverable errors; manually entered data and uploaded candidates remain available.
+The recruiter workflow starts at `/dashboard`: write a job description manually or import one from a document, review the generated required/preferred criteria, confirm the vacancy, upload one or more PDF resumes, and screen a ready candidate. Screening is synchronous, so the UI displays a truthful in-progress overlay until the API responds. Missing AI configuration and provider failures are shown as recoverable errors; manually entered data and uploaded candidates remain available.
 
 Verify or manually apply the current migration inside Docker with:
 
@@ -111,6 +112,14 @@ The principal routes are:
 - `/candidates/{candidateId}/screenings/{runId}` — immutable historical report
 
 The report clearly separates required and preferred coverage and shows text labels for `supported`, `partial`, and `no evidence`. Evidence quotations retain their source and page when available, uncertain items are collected under “Needs verification,” and generated interview questions can be copied but are never sent automatically. Candidate profile data is secondary context rather than proof of a requirement.
+
+## Manual vacancy criteria draft
+
+On `/jobs/new`, **Write manually** accepts a recruiter-authored title and job description. **Create & review criteria** sends those details to `POST /api/v1/jobs/analyze-description`, which uses the same structured job-analysis service as document import. This analysis endpoint does not persist a Job or JobRequirement.
+
+The shared analysis prompt recognizes required/preferred headings and sentence-level signals, requests independently verifiable criteria, and preserves alternatives such as “Go or a comparable programming language” without silently making Go mandatory. The recruiter-entered title and description remain authoritative. The returned requirements are editable drafts: the recruiter can edit, remove, add, and reclassify them before confirmation.
+
+Only **Confirm & create vacancy** persists the Job and final JobRequirement rows. If AI analysis is unavailable, the same review screen opens with an empty criteria list and a safe message so requirements can still be entered manually. Candidate screening remains a separate explicit action.
 
 ## Job-document import
 
@@ -212,6 +221,7 @@ All resource endpoints use the `/api/v1` prefix.
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
 | `POST` | `/api/v1/jobs` | Create a job for the development user |
+| `POST` | `/api/v1/jobs/analyze-description` | Generate an editable criteria draft from manual vacancy text without persistence |
 | `POST` | `/api/v1/jobs/import` | Extract a temporary job document and return an editable AI draft without persistence |
 | `GET` | `/api/v1/jobs` | List the user's jobs |
 | `GET` | `/api/v1/jobs/{job_id}` | Get a job |
@@ -307,6 +317,14 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
+Frontend interaction tests cover manual AI pre-population, recruiter edits, deletion, type changes, additions, confirmation, graceful AI fallback, and the existing upload flow:
+
+```bash
+cd frontend
+npm ci
+npm test
+```
+
 ## Verification commands
 
 ```bash
@@ -319,6 +337,7 @@ cd backend
 .venv/bin/pytest
 
 cd ../frontend
+npm test
 npm run typecheck
 npm run build
 ```

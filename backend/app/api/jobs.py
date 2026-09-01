@@ -19,8 +19,9 @@ from app.schemas.job_requirement import (
     JobRequirementResponse,
     JobRequirementUpdate,
 )
-from app.schemas.job_import import JobImportDraft
+from app.schemas.job_import import JobDescriptionAnalysisRequest, JobImportDraft
 from app.services import job_document_service, resume_service
+from app.services.job_import_service import generate_job_import_draft
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 AIClientDependency = Annotated[AIClient, Depends(get_ai_client)]
@@ -55,6 +56,42 @@ def create_job(data: JobCreate, db: DatabaseSession, user: DevelopmentUser) -> J
 @router.get("", response_model=list[JobResponse])
 def list_jobs(db: DatabaseSession, user: DevelopmentUser) -> list[Job]:
     return jobs.list_for_user(db, user_id=user.id)
+
+
+@router.post("/analyze-description", response_model=JobImportDraft)
+async def analyze_job_description(
+    data: JobDescriptionAnalysisRequest,
+    _: DevelopmentUser,
+    ai_client: AIClientDependency,
+) -> JobImportDraft:
+    """Generate an editable draft without persisting the vacancy or requirements."""
+
+    source_text = f"Job title:\n{data.title}\n\nJob description:\n{data.description}"
+    try:
+        draft = await generate_job_import_draft(source_text, ai_client=ai_client)
+    except AIConfigurationError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="AI service is not configured.",
+        ) from exc
+    except (AIProviderError, AIStructuredOutputError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="AI service is temporarily unavailable.",
+        ) from exc
+
+    # Recruiter-entered vacancy details remain authoritative; AI supplies only the draft criteria.
+    return draft.model_copy(
+        update={
+            "title": data.title,
+            "description": data.description,
+            "warnings": [
+                warning
+                for warning in draft.warnings
+                if warning.type != "inferred_title"
+            ],
+        }
+    )
 
 
 @router.post("/import", response_model=JobImportDraft)

@@ -125,6 +125,12 @@ export const getJobs = () => request<Job[]>("/api/v1/jobs");
 export const createJob = (data: JobCreateInput) =>
   request<Job>("/api/v1/jobs", jsonRequest("POST", data));
 
+export const analyzeJobDescription = (data: Pick<JobCreateInput, "title" | "description">) =>
+  request<JobImportDraft>(
+    "/api/v1/jobs/analyze-description",
+    jsonRequest("POST", data),
+  );
+
 export async function importJobDocument(file: File): Promise<JobImportDraft> {
   const form = new FormData();
   form.append("file", file);

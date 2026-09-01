@@ -29,6 +29,11 @@ class JobImportWarning(JobImportModel):
     related_text: str | None = Field(default=None, max_length=1000)
 
 
+class JobDescriptionAnalysisRequest(JobImportModel):
+    title: str = Field(min_length=1, max_length=255)
+    description: str = Field(min_length=1, max_length=20_000)
+
+
 class JobImportDraft(JobImportModel):
     title: str | None = Field(default=None, max_length=255)
     description: str = Field(min_length=1, max_length=20_000)
