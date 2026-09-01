@@ -68,9 +68,7 @@ class AISettings:
                 "AI_TIMEOUT_SECONDS must be greater than 0 and at most 600"
             )
         if not 0 <= self.max_retries <= 10:
-            raise AIConfigurationError(
-                "AI_MAX_RETRIES must be between 0 and 10"
-            )
+            raise AIConfigurationError("AI_MAX_RETRIES must be between 0 and 10")
         if not 0 <= self.temperature <= 2:
             raise AIConfigurationError("AI_TEMPERATURE must be between 0 and 2")
 
@@ -92,3 +90,9 @@ def get_ai_settings() -> AISettings:
     """Read AI settings on first AI use, not during application startup."""
 
     return AISettings.from_environment()
+
+
+def get_configured_ai_model_name() -> str | None:
+    """Return only the non-secret model identifier for screening audit metadata."""
+
+    return _optional_environment_value("AI_MODEL")

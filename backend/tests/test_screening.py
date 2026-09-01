@@ -9,8 +9,9 @@ from app.agents.schemas import CandidateProfile, CoverageSummary, ScreeningRepor
 from app.ai.client import get_ai_client, get_chat_model
 from app.ai.config import get_ai_settings
 from app.ai.exceptions import AIProviderError
-from app.models import Candidate, Job, ResumeDocument, User
-from app.models.enums import CandidateStatus, ResumeExtractionStatus
+from app.models import Candidate, Job, ResumeDocument, ScreeningRun, User
+from app.models.enums import CandidateStatus, ResumeExtractionStatus, ScreeningRunStatus
+from app.schemas.screening import CandidateReportResponse
 from app.services import screening_service
 
 
@@ -179,7 +180,7 @@ def test_screening_provider_failure_is_sanitized(
     assert "private-secret" not in response.text
 
 
-def test_screening_returns_report_without_persisting_or_changing_status(
+def test_screening_returns_persisted_report_and_changes_status(
     client: TestClient,
     db_session: Session,
     development_user: User,
@@ -196,10 +197,14 @@ def test_screening_returns_report_without_persisting_or_changing_status(
     response = client.post(f"/api/v1/candidates/{candidate.id}/screen")
 
     assert response.status_code == 200
-    assert response.json()["candidate_id"] == str(candidate.id)
+    assert response.json()["candidate"]["id"] == candidate.id
+    assert response.json()["screening_run"]["status"] == "completed"
     assert "decision" not in response.json()
     db_session.refresh(candidate)
-    assert candidate.status == CandidateStatus.UPLOADED
+    assert candidate.status == CandidateStatus.COMPLETED
+    run = db_session.query(ScreeningRun).one()
+    assert run.status == ScreeningRunStatus.COMPLETED
+    assert run.report_json is not None
     assert graph.calls == 1
 
 
@@ -223,5 +228,5 @@ def test_screening_service_accepts_an_injected_graph(
         )
     )
 
-    assert isinstance(report, ScreeningReport)
-    assert report.candidate_id == str(candidate.id)
+    assert isinstance(report, CandidateReportResponse)
+    assert report.candidate.id == candidate.id

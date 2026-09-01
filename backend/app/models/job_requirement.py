@@ -8,6 +8,7 @@ from app.database.base import Base
 from app.models.enums import RequirementType, enum_values
 
 if TYPE_CHECKING:
+    from app.models.evidence_result import EvidenceResult
     from app.models.job import Job
 
 
@@ -37,4 +38,7 @@ class JobRequirement(Base):
     )
 
     job: Mapped["Job"] = relationship(back_populates="requirements")
-
+    evidence_results: Mapped[list["EvidenceResult"]] = relationship(
+        back_populates="requirement",
+        passive_deletes=True,
+    )

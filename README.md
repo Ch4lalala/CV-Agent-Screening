@@ -1,6 +1,6 @@
 # Evidence-Grounded Recruitment Agent
 
-Phase 5 provides the lightweight application, persistence, secure resume ingestion, and core evidence-grounded recruitment agent described in the PRD:
+Phase 6 provides the lightweight application, secure resume ingestion, evidence-grounded recruitment graph, and persistent candidate reports described in the PRD:
 
 - Next.js and TypeScript frontend
 - FastAPI backend with `GET /health`
@@ -11,11 +11,13 @@ Phase 5 provides the lightweight application, persistence, secure resume ingesti
 - Persistent resume metadata and Docker-managed file storage
 - Lazy, provider-agnostic AI client for OpenAI-compatible endpoints
 - Pydantic-validated structured AI output with a bounded fallback
-- In-process LangGraph workflow for non-persistent candidate screening
+- In-process LangGraph workflow with persistent, historical screening runs
 - Deterministic evidence-quote verification, uncertainty grouping, and coverage
+- Normalized candidate profiles, evidence, citations, and interview questions
+- Latest-report, run-history, and specific-run APIs
 - Dockerfiles and Docker Compose orchestration
 
-Screening-result persistence, authentication, prompt-injection detection, privacy filtering, GitHub verification, autonomous decisions, and report UI are intentionally not part of this phase.
+Authentication, prompt-injection detection, privacy filtering, GitHub verification, autonomous decisions, and report UI are intentionally not part of this phase.
 
 ## Prerequisites
 
@@ -135,15 +137,27 @@ Evidence quotes are retained only when an exact equivalent exists in the extract
 
 The graph treats resume content as untrusted data and explicitly instructs the model not to follow document instructions. Phase 5 does not claim prompt-injection detection; that remains a later phase.
 
-Run a temporary, non-persistent screening with:
+Run and persist a screening with:
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/candidates/1/screen
 ```
 
-The endpoint requires a successfully extracted resume and configured AI provider. It returns transparent required/preferred coverage, individual evidence assessments, uncertainty, and up to five targeted questions. It never returns a hiring recommendation or black-box match score.
+The endpoint requires a successfully extracted resume and configured AI provider. It returns the persisted report with transparent required/preferred coverage, individual evidence assessments, uncertainty, and up to five targeted questions. It never returns a hiring recommendation or black-box match score.
 
-Screening sends the job data and extracted resume text to the configured external AI provider. The report is returned directly and is not stored, and `Candidate.status` remains unchanged until Phase 6 introduces screening-run persistence. Missing inputs return `404`, an incomplete extraction returns `409`, and missing or unavailable AI returns a sanitized `503`.
+Screening sends the job data and extracted resume text to the configured external AI provider. Before that call, the backend commits a `processing` run and candidate state; after the call, a separate short transaction persists the immutable report snapshot and normalized rows. Missing inputs return `404`, an incomplete extraction or concurrent run returns `409`, and missing or unavailable AI returns a sanitized `503`.
+
+Candidate screening status follows:
+
+```text
+uploaded -> processing -> completed
+                  \----> failed
+completed/failed -> processing (on a later screening)
+```
+
+Only one `processing` run is allowed per candidate. PostgreSQL enforces this with a partial unique index, while candidate row locking and application checks provide a clear `409` response. The potentially slow graph/provider call runs without a database transaction held open.
+
+Completed runs are historical snapshots. Later screenings or requirement edits create or affect new state without rewriting old `report_json`, profile, evidence, citations, or questions. Failed runs retain only a sanitized error message.
 
 ## Application API
 
@@ -165,8 +179,11 @@ All resource endpoints use the `/api/v1` prefix.
 | `GET` | `/api/v1/candidates/{candidate_id}` | Get candidate metadata |
 | `GET` | `/api/v1/candidates/{candidate_id}/resume` | Get extraction metadata without resume text |
 | `PATCH` | `/api/v1/candidates/{candidate_id}` | Update candidate metadata |
-| `DELETE` | `/api/v1/candidates/{candidate_id}` | Delete candidate metadata |
-| `POST` | `/api/v1/candidates/{candidate_id}/screen` | Run the non-persistent LangGraph screening workflow |
+| `DELETE` | `/api/v1/candidates/{candidate_id}` | Delete candidate, resume, file, and screening data |
+| `POST` | `/api/v1/candidates/{candidate_id}/screen` | Run, persist, and return a candidate screening report |
+| `GET` | `/api/v1/candidates/{candidate_id}/screening` | Get the latest completed screening report |
+| `GET` | `/api/v1/candidates/{candidate_id}/screenings` | List screening-run summaries newest first |
+| `GET` | `/api/v1/candidates/{candidate_id}/screenings/{run_id}` | Get one completed historical report |
 | `POST` | `/api/v1/ai/test` | Explicitly test optional AI configuration and structured output |
 
 The candidate endpoint uses `multipart/form-data` for Phase 3 uploads. The existing Phase 2 JSON metadata request remains supported for backward compatibility, but multipart PDF upload is the primary contract.
@@ -202,7 +219,7 @@ The upload response and resume metadata endpoint return page count, extraction s
 - Candidate or parent-job deletion removes resume rows and safely removes files only when their resolved paths are inside the configured storage directory.
 - If the file is already missing, candidate deletion still succeeds.
 
-Candidate status remains `uploaded` after successful ingestion. `resume_documents.extraction_status` separately records `pending`, `completed`, or `failed`, avoiding a conflict with future AI-screening status.
+Candidate status starts as `uploaded` after successful ingestion. `resume_documents.extraction_status` separately records `pending`, `completed`, or `failed`; candidate status changes only when screening begins.
 
 ## Database schema
 
@@ -213,8 +230,13 @@ The Alembic migrations create:
 - `job_requirements`
 - `candidates`
 - `resume_documents`
+- `screening_runs`
+- `candidate_profiles`
+- `evidence_results`
+- `evidence_items`
+- `interview_questions`
 
-Jobs belong to users. Requirements and candidates belong to jobs. Each candidate has at most one current resume document. Foreign keys use database-level cascading from parent to child; deleting a candidate removes its resume document, while deleting a job cannot delete its user.
+Jobs belong to users. Requirements and candidates belong to jobs. Each candidate has at most one current resume document and may have multiple screening runs. Each run owns one profile plus its evidence, citations, and interview questions. Foreign keys cascade screening data when a candidate is deleted; the resume file deletion flow remains in place. Deleting child screening records cannot delete their candidate, job, or user. Evidence links to recruiter requirements use `ON DELETE SET NULL`, preserving the historical requirement name and type if a requirement is later removed.
 
 Allowed values are enforced in both Pydantic and the database:
 
@@ -222,6 +244,9 @@ Allowed values are enforced in both Pydantic and the database:
 - Requirement type: `required`, `preferred`
 - Candidate status: `uploaded`, `processing`, `completed`, `failed`
 - Resume extraction status: `pending`, `completed`, `failed`
+- Screening run status: `pending`, `processing`, `completed`, `failed`
+- Evidence status: `supported`, `partial`, `no_evidence`
+- Evidence confidence: `high`, `medium`, `low`
 
 ## Run tests locally
 

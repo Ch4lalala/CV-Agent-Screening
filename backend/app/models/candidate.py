@@ -10,6 +10,7 @@ from app.models.enums import CandidateStatus, enum_values
 if TYPE_CHECKING:
     from app.models.job import Job
     from app.models.resume_document import ResumeDocument
+    from app.models.screening_run import ScreeningRun
 
 
 class Candidate(Base):
@@ -48,4 +49,8 @@ class Candidate(Base):
         passive_deletes=True,
         uselist=False,
     )
-
+    screening_runs: Mapped[list["ScreeningRun"]] = relationship(
+        back_populates="candidate",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
