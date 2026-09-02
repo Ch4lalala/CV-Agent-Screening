@@ -15,7 +15,12 @@ def create(db: Session, *, job_id: int, data: CandidateCreate) -> Candidate:
 
 
 def list_for_job(db: Session, *, job_id: int) -> list[Candidate]:
-    statement = select(Candidate).where(Candidate.job_id == job_id).order_by(Candidate.id)
+    statement = (
+        select(Candidate)
+        .where(Candidate.job_id == job_id)
+        .order_by(Candidate.id)
+        .execution_options(populate_existing=True)
+    )
     return list(db.scalars(statement))
 
 
@@ -24,6 +29,7 @@ def get_for_user(db: Session, *, candidate_id: int, user_id: int) -> Candidate |
         select(Candidate)
         .join(Job, Candidate.job_id == Job.id)
         .where(Candidate.id == candidate_id, Job.user_id == user_id)
+        .execution_options(populate_existing=True)
     )
     return db.scalar(statement)
 
@@ -39,4 +45,3 @@ def update(db: Session, *, candidate: Candidate, data: CandidateUpdate) -> Candi
 def delete(db: Session, *, candidate: Candidate) -> None:
     db.delete(candidate)
     db.commit()
-

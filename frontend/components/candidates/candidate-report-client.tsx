@@ -24,6 +24,7 @@ import {
   getJob,
   getLatestScreening,
   getScreeningHistory,
+  getScreeningProgress,
   getScreeningRun,
   screenCandidate,
 } from "@/lib/api/client";
@@ -34,7 +35,20 @@ import type {
   Job,
   ResumeMetadata,
   ScreeningRun,
+  ScreeningRunStatus,
+  ScreeningStage,
 } from "@/types/api";
+
+interface ProgressState {
+  runId: number | null;
+  status: ScreeningRunStatus;
+  currentStage: ScreeningStage;
+}
+
+function progressFromResponse(response: ScreeningRun | CandidateReport): ProgressState {
+  const run = "screening_run" in response ? response.screening_run : response;
+  return { runId: run.id, status: run.status, currentStage: run.current_stage };
+}
 
 export function CandidateReportClient({
   candidateId,
@@ -52,7 +66,10 @@ export function CandidateReportClient({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [screeningError, setScreeningError] = useState<string | null>(null);
-  const [screening, setScreening] = useState(false);
+  const [initiating, setInitiating] = useState(false);
+  const [progress, setProgress] = useState<ProgressState | null>(null);
+  const [progressOpen, setProgressOpen] = useState(false);
+  const [backgroundNotice, setBackgroundNotice] = useState<string | null>(null);
 
   const loadPage = useCallback(
     async (showLoading = true) => {
@@ -104,34 +121,111 @@ export function CandidateReportClient({
     if (candidate?.status !== "processing") {
       return;
     }
-    const interval = window.setInterval(() => void loadPage(false), 3000);
+    const interval = window.setInterval(() => void loadPage(false), 2000);
     return () => window.clearInterval(interval);
   }, [candidate?.status, loadPage]);
+
+  useEffect(() => {
+    if (!progress?.runId || progress.status !== "processing") {
+      return;
+    }
+    const runId = progress.runId;
+    let stopped = false;
+
+    async function poll() {
+      try {
+        const response = await getScreeningProgress(candidateId, runId);
+        if (stopped) {
+          return;
+        }
+        const next = progressFromResponse(response);
+        setProgress(next);
+        if (next.status !== "processing") {
+          await loadPage(false);
+          if (!progressOpen) {
+            setBackgroundNotice(
+              next.status === "completed"
+                ? "Screening is complete. The candidate report is ready."
+                : "Screening could not be completed. You can retry when ready.",
+            );
+          }
+        }
+      } catch {
+        // Polling is retried; persisted state allows recovery after refresh.
+      }
+    }
+
+    void poll();
+    const interval = window.setInterval(() => void poll(), 1500);
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+    };
+  }, [candidateId, loadPage, progress?.runId, progress?.status, progressOpen]);
 
   async function handleScreen() {
     if (!candidate) {
       return;
     }
-    setScreening(true);
+    setInitiating(true);
     setScreeningError(null);
+    setBackgroundNotice(null);
+    setProgress({ runId: null, status: "processing", currentStage: "queued" });
+    setProgressOpen(true);
     try {
-      await screenCandidate(candidate.id);
+      const started = await screenCandidate(candidate.id);
+      setProgress({
+        runId: started.screening_run_id,
+        status: started.status,
+        currentStage: started.current_stage,
+      });
+      setCandidate({ ...candidate, status: "processing" });
       if (historicalRunId) {
         router.push(`/candidates/${candidate.id}`);
-      } else {
-        await loadPage(false);
       }
     } catch (screenError) {
+      setProgressOpen(false);
+      setProgress(null);
       setScreeningError(
         getErrorMessage(
           screenError,
-          "The AI analysis could not be completed. You can retry screening.",
+          "The screening run could not be started. You can retry.",
         ),
       );
       await loadPage(false);
     } finally {
-      setScreening(false);
+      setInitiating(false);
     }
+  }
+
+  function openLatestProgress() {
+    const active = history.find((run) => run.status === "processing") ?? history[0];
+    if (!active) {
+      return;
+    }
+    setProgress({
+      runId: active.id,
+      status: active.status,
+      currentStage: active.current_stage,
+    });
+    setBackgroundNotice(null);
+    setProgressOpen(true);
+  }
+
+  function closeProgress() {
+    setProgressOpen(false);
+    if (progress?.status === "processing") {
+      setBackgroundNotice("Screening continues in the background.");
+    }
+  }
+
+  async function viewCompletedReport() {
+    setProgressOpen(false);
+    if (historicalRunId) {
+      router.push(`/candidates/${candidateId}`);
+      return;
+    }
+    await loadPage(false);
   }
 
   if (loading) {
@@ -152,10 +246,20 @@ export function CandidateReportClient({
   const showingOlderCompletedRun =
     report !== null && latestAttempt !== undefined && latestAttempt.id !== report.screening_run.id;
   const resumeReady = resume?.extraction_status === "completed";
+  const processing = candidate.status === "processing";
 
   return (
     <div className="page-stack report-page">
-      {screening ? <AnalysisWorkflow candidateName={candidateName} /> : null}
+      {progressOpen && progress ? (
+        <AnalysisWorkflow
+          candidateName={candidateName}
+          status={progress.status}
+          currentStage={progress.currentStage}
+          onClose={closeProgress}
+          onViewReport={() => void viewCompletedReport()}
+          onRetry={() => void handleScreen()}
+        />
+      ) : null}
 
       <div className="breadcrumbs" aria-label="Breadcrumb">
         <Link href="/dashboard">Vacancies</Link>
@@ -178,9 +282,13 @@ export function CandidateReportClient({
       ) : null}
 
       {showingOlderCompletedRun && !historicalRunId ? (
-        <Alert tone="warning" title="Latest screening attempt did not complete">
-          <p>The most recent completed report is shown below. Review screening history for details.</p>
+        <Alert tone={latestAttempt?.status === "processing" ? "info" : "warning"} title={latestAttempt?.status === "processing" ? "A new screening is in progress" : "Latest screening attempt did not complete"}>
+          <p>The most recent completed report remains visible until a new run completes.</p>
         </Alert>
+      ) : null}
+
+      {backgroundNotice ? (
+        <Alert tone="info" title="Background screening">{backgroundNotice}</Alert>
       ) : null}
 
       <PageHeader
@@ -193,14 +301,16 @@ export function CandidateReportClient({
             <button
               className="button button-primary"
               type="button"
-              disabled={screening || candidate.status === "processing" || !resumeReady}
-              onClick={() => void handleScreen()}
+              disabled={initiating || !resumeReady}
+              onClick={processing ? openLatestProgress : () => void handleScreen()}
             >
-              {screening
-                ? "Analyzing…"
-                : candidate.status === "uploaded"
-                  ? "Screen candidate"
-                  : "Run screening again"}
+              {initiating
+                ? "Starting…"
+                : processing
+                  ? "View progress"
+                  : candidate.status === "uploaded"
+                    ? "Screen candidate"
+                    : "Run screening again"}
             </button>
           </div>
         }
@@ -221,13 +331,13 @@ export function CandidateReportClient({
         </div>
         <div>
           <span>Model</span>
-          <strong>{report?.screening_run.model_name ?? "Not recorded"}</strong>
+          <strong>{report?.screening_run.model_name ?? latestAttempt?.model_name ?? "Not recorded"}</strong>
         </div>
       </section>
 
       {error ? <Alert title="Report unavailable">{error}</Alert> : null}
       {screeningError ? (
-        <Alert title="Screening failed">
+        <Alert title="Unable to start screening">
           <p>{screeningError}</p>
           <button className="text-button" type="button" onClick={() => void handleScreen()}>
             Retry screening
@@ -235,9 +345,12 @@ export function CandidateReportClient({
         </Alert>
       ) : null}
 
-      {candidate.status === "processing" && !screening ? (
+      {processing ? (
         <Alert tone="info" title="Candidate screening is in progress">
-          This page will refresh when the current analysis finishes.
+          <p>The backend continues processing if you leave or refresh this page.</p>
+          <button className="text-button" type="button" onClick={openLatestProgress}>
+            View progress
+          </button>
         </Alert>
       ) : null}
 
@@ -250,20 +363,22 @@ export function CandidateReportClient({
       {!report ? (
         <EmptyState
           icon="◎"
-          title={candidate.status === "failed" ? "Screening failed" : "No completed screening yet"}
+          title={candidate.status === "failed" ? "Screening failed" : processing ? "Screening in progress" : "No completed screening yet"}
           description={
             candidate.status === "failed"
-              ? "The AI analysis could not be completed. Review the safe error in history and retry when ready."
-              : "Start screening to create an evidence-grounded report for recruiter review."
+              ? "ProofHire could not complete this analysis. Retry when ready."
+              : processing
+                ? "You can leave this page while the evidence workflow continues."
+                : "Start screening to create an evidence-grounded report for recruiter review."
           }
           action={
             <button
               className="button button-primary"
               type="button"
-              disabled={screening || candidate.status === "processing" || !resumeReady}
-              onClick={() => void handleScreen()}
+              disabled={initiating || !resumeReady}
+              onClick={processing ? openLatestProgress : () => void handleScreen()}
             >
-              {candidate.status === "failed" ? "Retry screening" : "Screen candidate"}
+              {processing ? "View progress" : candidate.status === "failed" ? "Retry screening" : "Screen candidate"}
             </button>
           }
         />

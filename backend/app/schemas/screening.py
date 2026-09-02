@@ -10,6 +10,7 @@ from app.models.enums import (
     EvidenceStatus,
     RequirementType,
     ScreeningRunStatus,
+    ScreeningStage,
 )
 
 
@@ -19,12 +20,22 @@ class ScreeningResponseModel(BaseModel):
 
 class ScreeningRunResponse(ScreeningResponseModel):
     id: int
+    candidate_id: int
     status: ScreeningRunStatus
+    current_stage: ScreeningStage
+    current_stage_updated_at: datetime
     model_name: str | None
     started_at: datetime | None
     finished_at: datetime | None
     error_message: str | None
     created_at: datetime
+
+
+class ScreeningStartResponse(ScreeningResponseModel):
+    screening_run_id: int
+    candidate_id: int
+    status: ScreeningRunStatus
+    current_stage: ScreeningStage
 
 
 class CandidateReportCandidateResponse(ScreeningResponseModel):

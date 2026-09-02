@@ -32,6 +32,18 @@ class ScreeningRunStatus(str, Enum):
     FAILED = "failed"
 
 
+class ScreeningStage(str, Enum):
+    QUEUED = "queued"
+    NORMALIZE_REQUIREMENTS = "normalize_requirements"
+    EXTRACT_CANDIDATE_PROFILE = "extract_candidate_profile"
+    MATCH_EVIDENCE = "match_evidence"
+    ANALYZE_UNCERTAINTY = "analyze_uncertainty"
+    GENERATE_INTERVIEW_QUESTIONS = "generate_interview_questions"
+    GENERATE_REPORT = "generate_report"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class EvidenceStatus(str, Enum):
     SUPPORTED = "supported"
     PARTIAL = "partial"

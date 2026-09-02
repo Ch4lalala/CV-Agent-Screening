@@ -43,8 +43,22 @@ def list_for_candidate(db: Session, *, candidate_id: int) -> list[ScreeningRun]:
         select(ScreeningRun)
         .where(ScreeningRun.candidate_id == candidate_id)
         .order_by(ScreeningRun.created_at.desc(), ScreeningRun.id.desc())
+        .execution_options(populate_existing=True)
     )
     return list(db.scalars(statement))
+
+
+def get_for_candidate(
+    db: Session, *, candidate_id: int, screening_run_id: int
+) -> ScreeningRun | None:
+    return db.scalar(
+        select(ScreeningRun)
+        .where(
+            ScreeningRun.id == screening_run_id,
+            ScreeningRun.candidate_id == candidate_id,
+        )
+        .execution_options(populate_existing=True)
+    )
 
 
 def get_completed(

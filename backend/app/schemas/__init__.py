@@ -13,7 +13,11 @@ from app.schemas.job_requirement import (
 )
 from app.schemas.user import UserCreate, UserResponse, UserUpdate
 from app.schemas.resume import ResumeMetadataResponse, ResumeSummaryResponse
-from app.schemas.screening import CandidateReportResponse, ScreeningRunResponse
+from app.schemas.screening import (
+    CandidateReportResponse,
+    ScreeningRunResponse,
+    ScreeningStartResponse,
+)
 
 __all__ = [
     "CandidateCreate",
@@ -31,6 +35,7 @@ __all__ = [
     "ResumeMetadataResponse",
     "ResumeSummaryResponse",
     "ScreeningRunResponse",
+    "ScreeningStartResponse",
     "UserCreate",
     "UserResponse",
     "UserUpdate",

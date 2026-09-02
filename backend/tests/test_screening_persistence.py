@@ -1,4 +1,7 @@
 import asyncio
+import queue
+import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -56,6 +59,48 @@ class FakeGraph:
         if isinstance(result, Exception):
             raise result
         return result
+
+    async def astream(self, _: object, *, stream_mode: str):
+        assert stream_mode == "updates"
+        if self.on_invoke is not None:
+            self.on_invoke()
+        result = self.results[self.calls]
+        self.calls += 1
+        if isinstance(result, Exception):
+            raise result
+        for node in (
+            "normalize_requirements",
+            "extract_candidate_profile",
+            "match_evidence",
+            "analyze_uncertainty",
+            "generate_interview_questions",
+        ):
+            yield {node: {}}
+        yield {"generate_report": result}
+
+
+class GatedStageGraph:
+    def __init__(self, report: ScreeningReport) -> None:
+        self.report = report
+        self.entered: queue.Queue[str] = queue.Queue()
+        self.advance = threading.Semaphore(0)
+
+    async def astream(self, _: object, *, stream_mode: str):
+        assert stream_mode == "updates"
+        stages = (
+            "normalize_requirements",
+            "extract_candidate_profile",
+            "match_evidence",
+            "analyze_uncertainty",
+            "generate_interview_questions",
+            "generate_report",
+        )
+        for stage in stages:
+            self.entered.put(stage)
+            while not self.advance.acquire(blocking=False):
+                await asyncio.sleep(0.005)
+            update = {"final_report": self.report} if stage == "generate_report" else {}
+            yield {stage: update}
 
 
 def candidate_with_requirement(
@@ -181,6 +226,42 @@ def install_graph(
     return graph
 
 
+def wait_for_existing(
+    client: TestClient,
+    candidate_id: int,
+    run_id: int,
+) -> dict[str, object]:
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        response = client.get(
+            f"/api/v1/candidates/{candidate_id}/screenings/"
+            f"{run_id}"
+        )
+        assert response.status_code == 200
+        result = response.json()
+        status = result.get("status", result.get("screening_run", {}).get("status"))
+        if status != "processing":
+            return result
+        time.sleep(0.01)
+    raise AssertionError("Screening run did not finish")
+
+
+def start_and_wait(
+    client: TestClient,
+    candidate_id: int,
+) -> tuple[dict[str, object], dict[str, object]]:
+    started_response = client.post(f"/api/v1/candidates/{candidate_id}/screen")
+    assert started_response.status_code == 202
+    started = started_response.json()
+    assert started["candidate_id"] == candidate_id
+    assert started["status"] == "processing"
+    return started, wait_for_existing(
+        client,
+        candidate_id,
+        started["screening_run_id"],
+    )
+
+
 def test_successful_run_persists_full_report_and_model_name(
     client: TestClient,
     db_session: Session,
@@ -192,13 +273,11 @@ def test_successful_run_persists_full_report_and_model_name(
     monkeypatch.setenv("AI_MODEL", "test-model-v1")
     install_graph(monkeypatch, {"final_report": report})
 
-    response = client.post(f"/api/v1/candidates/{candidate.id}/screen")
-
-    assert response.status_code == 200
-    payload = response.json()
+    _, payload = start_and_wait(client, candidate.id)
     run = db_session.scalar(select(ScreeningRun))
     assert run is not None
     assert run.status == ScreeningRunStatus.COMPLETED
+    assert run.current_stage.value == "completed"
     assert run.started_at is not None
     assert run.finished_at is not None
     assert run.model_name == "test-model-v1"
@@ -220,6 +299,66 @@ def test_successful_run_persists_full_report_and_model_name(
     assert evidence_item.quote == "Go and PostgreSQL"
     assert question is not None
     assert "production work" in question.question
+
+
+def test_background_start_returns_202_and_persists_real_node_progress(
+    client: TestClient,
+    db_session: Session,
+    development_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate, requirement = candidate_with_requirement(db_session, development_user)
+    graph = GatedStageGraph(report_for(candidate, requirement_id=requirement.id))
+    monkeypatch.setattr(screening_service, "get_recruitment_graph", lambda: graph)
+
+    started_at = time.monotonic()
+    response = client.post(f"/api/v1/candidates/{candidate.id}/screen")
+    elapsed = time.monotonic() - started_at
+
+    assert response.status_code == 202
+    assert elapsed < 0.5
+    started = response.json()
+    assert started == {
+        "screening_run_id": started["screening_run_id"],
+        "candidate_id": candidate.id,
+        "status": "processing",
+        "current_stage": "queued",
+    }
+    assert graph.entered.get(timeout=1) == "normalize_requirements"
+
+    run_id = started["screening_run_id"]
+    db_session.expire_all()
+    run = db_session.get(ScreeningRun, run_id)
+    current_candidate = db_session.get(Candidate, candidate.id)
+    assert run.status == ScreeningRunStatus.PROCESSING
+    assert run.current_stage.value == "normalize_requirements"
+    assert current_candidate.status == CandidateStatus.PROCESSING
+
+    duplicate = client.post(f"/api/v1/candidates/{candidate.id}/screen")
+    assert duplicate.status_code == 409
+
+    expected_current = (
+        "extract_candidate_profile",
+        "match_evidence",
+        "analyze_uncertainty",
+        "generate_interview_questions",
+        "generate_report",
+    )
+    for expected in expected_current:
+        graph.advance.release()
+        assert graph.entered.get(timeout=1) == expected
+        progress = client.get(
+            f"/api/v1/candidates/{candidate.id}/screenings/{run_id}"
+        )
+        assert progress.status_code == 200
+        assert progress.json()["status"] == "processing"
+        assert progress.json()["current_stage"] == expected
+
+    graph.advance.release()
+    completed = wait_for_existing(client, candidate.id, run_id)
+    assert completed["screening_run"]["current_stage"] == "completed"
+    db_session.expire_all()
+    assert db_session.get(Candidate, candidate.id).status == CandidateStatus.COMPLETED
 
 
 def test_run_and_candidate_are_processing_during_graph_then_completed(
@@ -270,7 +409,7 @@ def test_latest_history_and_specific_report_endpoints(
     candidate, requirement = candidate_with_requirement(db_session, development_user)
     report = report_for(candidate, requirement_id=requirement.id)
     install_graph(monkeypatch, {"final_report": report})
-    created = client.post(f"/api/v1/candidates/{candidate.id}/screen").json()
+    _, created = start_and_wait(client, candidate.id)
     run_id = created["screening_run"]["id"]
 
     latest = client.get(f"/api/v1/candidates/{candidate.id}/screening")
@@ -307,8 +446,8 @@ def test_second_run_creates_new_immutable_historical_snapshot(
         {"final_report": second_report},
     )
 
-    first = client.post(f"/api/v1/candidates/{candidate.id}/screen").json()
-    second = client.post(f"/api/v1/candidates/{candidate.id}/screen").json()
+    _, first = start_and_wait(client, candidate.id)
+    _, second = start_and_wait(client, candidate.id)
 
     assert first["screening_run"]["id"] != second["screening_run"]["id"]
     history = client.get(f"/api/v1/candidates/{candidate.id}/screenings").json()
@@ -361,10 +500,10 @@ def test_ai_failure_persists_safe_failure_and_candidate_status(
     monkeypatch.setenv("AI_MODEL", "safe-model")
     install_graph(monkeypatch, AIProviderError("secret-provider-detail"))
 
-    response = client.post(f"/api/v1/candidates/{candidate.id}/screen")
+    _, result = start_and_wait(client, candidate.id)
 
-    assert response.status_code == 503
-    assert "secret-provider-detail" not in response.text
+    assert result["status"] == "failed"
+    assert "secret-provider-detail" not in str(result)
     db_session.expire_all()
     run = db_session.scalar(select(ScreeningRun))
     current_candidate = db_session.get(Candidate, candidate.id)
@@ -392,9 +531,7 @@ def test_ai_derived_requirement_persists_null_requirement_id(
     )
     install_graph(monkeypatch, {"final_report": report})
 
-    response = client.post(f"/api/v1/candidates/{candidate.id}/screen")
-
-    assert response.status_code == 200
+    start_and_wait(client, candidate.id)
     evidence = db_session.scalar(select(EvidenceResult))
     assert evidence is not None
     assert evidence.requirement_id is None
@@ -425,9 +562,7 @@ def test_untrusted_recruiter_requirement_id_is_not_mapped(
     report = report_for(candidate, requirement_id=other_requirement.id)
     install_graph(monkeypatch, {"final_report": report})
 
-    response = client.post(f"/api/v1/candidates/{candidate.id}/screen")
-
-    assert response.status_code == 200
+    start_and_wait(client, candidate.id)
     evidence = db_session.scalar(select(EvidenceResult))
     assert evidence.requirement_id is None
 
@@ -446,9 +581,8 @@ def test_cross_candidate_run_access_returns_404(
         monkeypatch,
         {"final_report": report_for(first_candidate, requirement_id=requirement.id)},
     )
-    run_id = client.post(f"/api/v1/candidates/{first_candidate.id}/screen").json()[
-        "screening_run"
-    ]["id"]
+    _, completed = start_and_wait(client, first_candidate.id)
+    run_id = completed["screening_run"]["id"]
 
     response = client.get(
         f"/api/v1/candidates/{second_candidate.id}/screenings/{run_id}"
@@ -480,7 +614,7 @@ def test_failed_run_is_in_history_but_not_available_as_report(
 ) -> None:
     candidate, _ = candidate_with_requirement(db_session, development_user)
     install_graph(monkeypatch, AIProviderError("private"))
-    client.post(f"/api/v1/candidates/{candidate.id}/screen")
+    start_and_wait(client, candidate.id)
     run = db_session.scalar(select(ScreeningRun))
 
     history = client.get(f"/api/v1/candidates/{candidate.id}/screenings")
@@ -493,7 +627,9 @@ def test_failed_run_is_in_history_but_not_available_as_report(
         "AI provider is temporarily unavailable."
     )
     assert latest.status_code == 404
-    assert specific.status_code == 404
+    assert specific.status_code == 200
+    assert specific.json()["status"] == "failed"
+    assert specific.json()["current_stage"] == "failed"
 
 
 def test_candidate_delete_cascades_screening_rows_and_removes_resume_file(
@@ -516,7 +652,7 @@ def test_candidate_delete_cascades_screening_rows_and_removes_resume_file(
         monkeypatch,
         {"final_report": report_for(candidate, requirement_id=requirement.id)},
     )
-    client.post(f"/api/v1/candidates/{candidate.id}/screen")
+    start_and_wait(client, candidate.id)
 
     response = client.delete(f"/api/v1/candidates/{candidate.id}")
 
@@ -543,10 +679,9 @@ def test_report_response_does_not_expose_resume_or_provider_secrets(
         {"final_report": report_for(candidate, requirement_id=requirement.id)},
     )
 
-    response = client.post(f"/api/v1/candidates/{candidate.id}/screen")
+    _, result = start_and_wait(client, candidate.id)
 
-    assert response.status_code == 200
-    serialized = response.text
+    serialized = str(result)
     assert "never-return-this-key" not in serialized
     assert "private-provider" not in serialized
     assert "resume_path" not in serialized

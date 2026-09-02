@@ -9,7 +9,9 @@ import type {
   JobUpdateInput,
   RequirementInput,
   ResumeMetadata,
+  ScreeningProgressResponse,
   ScreeningRun,
+  ScreeningStart,
 } from "@/types/api";
 
 interface BackendErrorBody {
@@ -201,7 +203,7 @@ export async function uploadCandidate(
 }
 
 export const screenCandidate = (candidateId: number) =>
-  request<CandidateReport>(`/api/v1/candidates/${candidateId}/screen`, {
+  request<ScreeningStart>(`/api/v1/candidates/${candidateId}/screen`, {
     method: "POST",
   });
 
@@ -213,5 +215,10 @@ export const getScreeningHistory = (candidateId: number) =>
 
 export const getScreeningRun = (candidateId: number, runId: number) =>
   request<CandidateReport>(
+    `/api/v1/candidates/${candidateId}/screenings/${runId}`,
+  );
+
+export const getScreeningProgress = (candidateId: number, runId: number) =>
+  request<ScreeningProgressResponse>(
     `/api/v1/candidates/${candidateId}/screenings/${runId}`,
   );

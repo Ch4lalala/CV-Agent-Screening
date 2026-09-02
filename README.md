@@ -14,7 +14,7 @@ Phase 7.5 provides the lightweight application, secure document ingestion, evide
 - Persistent resume metadata and Docker-managed file storage
 - Lazy, provider-agnostic AI client for OpenAI-compatible endpoints
 - Pydantic-validated structured AI output with a bounded fallback
-- In-process LangGraph workflow with persistent, historical screening runs
+- In-process asynchronous LangGraph workflow with persisted stage progress and historical screening runs
 - Deterministic evidence-quote verification, uncertainty grouping, and coverage
 - Normalized candidate profiles, evidence, citations, and interview questions
 - Latest-report, run-history, and specific-run APIs
@@ -60,7 +60,7 @@ Authentication, Phase 8 prompt-injection detection, resume privacy filtering, Gi
 
 5. Open the frontend at [http://localhost:3000](http://localhost:3000). FastAPI documentation is available at [http://localhost:8000/docs](http://localhost:8000/docs).
 
-The recruiter workflow starts at `/dashboard`: write a job description manually or import one from a document, review the generated required/preferred criteria, confirm the vacancy, upload one or more PDF resumes, and screen a ready candidate. Screening is synchronous, so the UI displays a truthful in-progress overlay until the API responds. Missing AI configuration and provider failures are shown as recoverable errors; manually entered data and uploaded candidates remain available.
+The recruiter workflow starts at `/dashboard`: write a job description manually or import one from a document, review the generated required/preferred criteria, confirm the vacancy, upload one or more PDF resumes, and screen a ready candidate. Starting a screening returns `202 Accepted` quickly and the in-process background task persists each real LangGraph stage. The UI polls that persisted state every 1.5 seconds while a progress modal is open. The modal can be dismissed without cancelling the run, and **View progress** restores it after navigation or refresh. Missing AI configuration and provider failures are shown as recoverable errors; manually entered data and uploaded candidates remain available.
 
 Verify or manually apply the current migration inside Docker with:
 
@@ -198,9 +198,39 @@ Run and persist a screening with:
 curl -X POST http://localhost:8000/api/v1/candidates/1/screen
 ```
 
-The endpoint requires a successfully extracted resume and configured AI provider. It returns the persisted report with transparent required/preferred coverage, individual evidence assessments, uncertainty, and up to five targeted questions. It never returns a hiring recommendation or black-box match score.
+The endpoint requires a successfully extracted resume and configured AI provider. It creates the run, marks the candidate as `processing`, schedules the graph in the FastAPI process, and returns `202 Accepted` with the new run ID:
 
-Screening sends the job data and extracted resume text to the configured external AI provider. Before that call, the backend commits a `processing` run and candidate state; after the call, a separate short transaction persists the immutable report snapshot and normalized rows. Missing inputs return `404`, an incomplete extraction or concurrent run returns `409`, and missing or unavailable AI returns a sanitized `503`.
+```json
+{
+  "screening_run_id": 12,
+  "candidate_id": 1,
+  "status": "processing",
+  "current_stage": "queued"
+}
+```
+
+Poll the persisted run while it is processing:
+
+```bash
+curl http://localhost:8000/api/v1/candidates/1/screenings/12
+```
+
+Processing and failed runs return run metadata, including `current_stage` and `current_stage_updated_at`. A completed run returns the immutable evidence report with transparent required/preferred coverage, individual evidence assessments, uncertainty, and up to five targeted questions. It never returns a hiring recommendation or black-box match score.
+
+Screening sends the job data and extracted resume text to the configured external AI provider. The background task uses a separate database session and commits progress only after actual LangGraph node updates; it does not use fake percentages or timers. After the graph finishes, a short transaction persists the immutable report snapshot and normalized rows. Missing inputs return `404`, and an incomplete extraction or concurrent run returns `409`. Provider and graph failures are persisted as a sanitized failed run so the recruiter can retry.
+
+Persisted stages follow the graph without exposing internal labels in the UI:
+
+```text
+queued
+  -> normalize_requirements
+  -> extract_candidate_profile
+  -> match_evidence
+  -> analyze_uncertainty
+  -> generate_interview_questions
+  -> generate_report
+  -> completed | failed
+```
 
 Candidate screening status follows:
 
@@ -237,10 +267,10 @@ All resource endpoints use the `/api/v1` prefix.
 | `GET` | `/api/v1/candidates/{candidate_id}/resume` | Get extraction metadata without resume text |
 | `PATCH` | `/api/v1/candidates/{candidate_id}` | Update candidate metadata |
 | `DELETE` | `/api/v1/candidates/{candidate_id}` | Delete candidate, resume, file, and screening data |
-| `POST` | `/api/v1/candidates/{candidate_id}/screen` | Run, persist, and return a candidate screening report |
+| `POST` | `/api/v1/candidates/{candidate_id}/screen` | Create a screening run and return `202 Accepted` |
 | `GET` | `/api/v1/candidates/{candidate_id}/screening` | Get the latest completed screening report |
 | `GET` | `/api/v1/candidates/{candidate_id}/screenings` | List screening-run summaries newest first |
-| `GET` | `/api/v1/candidates/{candidate_id}/screenings/{run_id}` | Get one completed historical report |
+| `GET` | `/api/v1/candidates/{candidate_id}/screenings/{run_id}` | Poll run metadata or get its completed historical report |
 | `POST` | `/api/v1/ai/test` | Explicitly test optional AI configuration and structured output |
 
 The candidate endpoint uses `multipart/form-data` for Phase 3 uploads. The existing Phase 2 JSON metadata request remains supported for backward compatibility, but multipart PDF upload is the primary contract.
@@ -302,6 +332,7 @@ Allowed values are enforced in both Pydantic and the database:
 - Candidate status: `uploaded`, `processing`, `completed`, `failed`
 - Resume extraction status: `pending`, `completed`, `failed`
 - Screening run status: `pending`, `processing`, `completed`, `failed`
+- Screening stage: `queued`, six graph-node stages, `completed`, `failed`
 - Evidence status: `supported`, `partial`, `no_evidence`
 - Evidence confidence: `high`, `medium`, `low`
 
@@ -317,7 +348,7 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-Frontend interaction tests cover manual AI pre-population, recruiter edits, deletion, type changes, additions, confirmation, graceful AI fallback, and the existing upload flow:
+Frontend interaction tests cover manual AI pre-population, recruiter edits, deletion, type changes, additions, confirmation, graceful AI fallback, upload, persisted screening progress, dismissal, completion/failure actions, and processing-row recovery:
 
 ```bash
 cd frontend

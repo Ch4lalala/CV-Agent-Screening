@@ -3,6 +3,16 @@ export type RequirementType = "required" | "preferred";
 export type CandidateStatus = "uploaded" | "processing" | "completed" | "failed";
 export type ResumeExtractionStatus = "pending" | "completed" | "failed";
 export type ScreeningRunStatus = "pending" | "processing" | "completed" | "failed";
+export type ScreeningStage =
+  | "queued"
+  | "normalize_requirements"
+  | "extract_candidate_profile"
+  | "match_evidence"
+  | "analyze_uncertainty"
+  | "generate_interview_questions"
+  | "generate_report"
+  | "completed"
+  | "failed";
 export type EvidenceStatus = "supported" | "partial" | "no_evidence";
 export type EvidenceConfidence = "high" | "medium" | "low";
 
@@ -104,12 +114,22 @@ export interface CandidateUploadResponse extends Candidate {
 
 export interface ScreeningRun {
   id: number;
+  candidate_id: number;
   status: ScreeningRunStatus;
+  current_stage: ScreeningStage;
+  current_stage_updated_at: string;
   model_name: string | null;
   started_at: string | null;
   finished_at: string | null;
   error_message: string | null;
   created_at: string;
+}
+
+export interface ScreeningStart {
+  screening_run_id: number;
+  candidate_id: number;
+  status: ScreeningRunStatus;
+  current_stage: ScreeningStage;
 }
 
 export interface Coverage {
@@ -205,3 +225,5 @@ export interface CandidateReport {
   interview_questions: InterviewQuestion[];
   security_warning: null;
 }
+
+export type ScreeningProgressResponse = ScreeningRun | CandidateReport;

@@ -1,11 +1,15 @@
-"""Coordinate screening inputs, run lifecycle, graph execution, and report reads."""
+"""Coordinate screening initiation, background graph execution, and report reads."""
 
+import asyncio
 import logging
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from pydantic import ValidationError
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents.graph import get_recruitment_graph
 from app.agents.schemas import RecruiterRequirement, ScreeningReport
@@ -17,7 +21,12 @@ from app.ai.exceptions import (
     AIStructuredOutputError,
 )
 from app.models.candidate import Candidate
-from app.models.enums import CandidateStatus, ResumeExtractionStatus, ScreeningRunStatus
+from app.models.enums import (
+    CandidateStatus,
+    ResumeExtractionStatus,
+    ScreeningRunStatus,
+    ScreeningStage,
+)
 from app.models.screening_run import ScreeningRun
 from app.repositories import (
     candidates,
@@ -26,10 +35,28 @@ from app.repositories import (
     resume_documents,
     screening_runs,
 )
-from app.schemas.screening import CandidateReportResponse, ScreeningRunResponse
+from app.schemas.screening import (
+    CandidateReportResponse,
+    ScreeningRunResponse,
+    ScreeningStartResponse,
+)
 from app.services import screening_persistence_service
 
 logger = logging.getLogger(__name__)
+
+_NODE_STAGES = (
+    ScreeningStage.NORMALIZE_REQUIREMENTS,
+    ScreeningStage.EXTRACT_CANDIDATE_PROFILE,
+    ScreeningStage.MATCH_EVIDENCE,
+    ScreeningStage.ANALYZE_UNCERTAINTY,
+    ScreeningStage.GENERATE_INTERVIEW_QUESTIONS,
+    ScreeningStage.GENERATE_REPORT,
+)
+_NEXT_STAGE = {
+    stage.value: _NODE_STAGES[index + 1]
+    for index, stage in enumerate(_NODE_STAGES[:-1])
+}
+_background_tasks: set[asyncio.Task[None]] = set()
 
 
 class ScreeningInputNotFoundError(Exception):
@@ -52,13 +79,23 @@ class ScreeningExecutionError(Exception):
     pass
 
 
-def _safe_failure_message(exc: Exception) -> str:
+@dataclass(frozen=True)
+class ScreeningExecutionContext:
+    run_id: int
+    candidate_id: int
+    initial_state: RecruitmentState
+    valid_requirement_ids: set[int]
+
+
+def _safe_failure_message(exc: BaseException) -> str:
     if isinstance(exc, AIConfigurationError):
         return "AI service is not configured."
     if isinstance(exc, AIProviderError):
         return "AI provider is temporarily unavailable."
     if isinstance(exc, AIStructuredOutputError):
         return "AI returned an invalid structured response."
+    if isinstance(exc, asyncio.CancelledError):
+        return "Candidate screening was interrupted."
     return "Candidate screening failed."
 
 
@@ -123,6 +160,8 @@ def _start_screening(
     run = ScreeningRun(
         candidate_id=candidate.id,
         status=ScreeningRunStatus.PROCESSING,
+        current_stage=ScreeningStage.QUEUED,
+        current_stage_updated_at=datetime.now(UTC),
         model_name=get_configured_ai_model_name(),
         started_at=datetime.now(UTC),
     )
@@ -141,6 +180,181 @@ def _start_screening(
     return run, initial_state, valid_requirement_ids
 
 
+def start_candidate_screening(
+    db: Session, *, candidate_id: int, user_id: int
+) -> tuple[ScreeningStartResponse, ScreeningExecutionContext]:
+    """Commit the authoritative processing run before any graph work begins."""
+
+    run, initial_state, valid_requirement_ids = _start_screening(
+        db,
+        candidate_id=candidate_id,
+        user_id=user_id,
+    )
+    context = ScreeningExecutionContext(
+        run_id=run.id,
+        candidate_id=candidate_id,
+        initial_state=initial_state,
+        valid_requirement_ids=valid_requirement_ids,
+    )
+    logger.info(
+        "screening_queued",
+        extra={
+            "candidate_id": candidate_id,
+            "job_id": initial_state["job_id"],
+            "screening_run_id": run.id,
+        },
+    )
+    return (
+        ScreeningStartResponse(
+            screening_run_id=run.id,
+            candidate_id=candidate_id,
+            status=run.status,
+            current_stage=run.current_stage,
+        ),
+        context,
+    )
+
+
+def _persist_stage(db: Session, *, run_id: int, stage: ScreeningStage) -> None:
+    run = db.get(ScreeningRun, run_id)
+    if run is None or run.status != ScreeningRunStatus.PROCESSING:
+        raise ScreeningExecutionError("Screening run is no longer processing")
+    run.current_stage = stage
+    run.current_stage_updated_at = datetime.now(UTC)
+    db.commit()
+
+
+async def _stream_graph(
+    graph: object,
+    *,
+    initial_state: RecruitmentState,
+    on_node_completed: Callable[[str], Awaitable[None]],
+) -> object:
+    """Return the final report payload while reporting real completed nodes."""
+
+    stream = getattr(graph, "astream", None)
+    if callable(stream):
+        final_report: object | None = None
+        async for update in stream(initial_state, stream_mode="updates"):
+            if not isinstance(update, dict):
+                continue
+            for node_name, node_update in update.items():
+                if node_name not in {stage.value for stage in _NODE_STAGES}:
+                    continue
+                if (
+                    node_name == ScreeningStage.GENERATE_REPORT.value
+                    and isinstance(node_update, dict)
+                ):
+                    final_report = node_update.get("final_report")
+                await on_node_completed(node_name)
+        if final_report is None:
+            raise ScreeningExecutionError("Screening graph did not produce a report")
+        return final_report
+
+    invoke = getattr(graph, "ainvoke", None)
+    if not callable(invoke):
+        raise ScreeningExecutionError("Screening graph is not executable")
+    result = await invoke(initial_state)
+    if not isinstance(result, dict) or "final_report" not in result:
+        raise ScreeningExecutionError("Screening graph did not produce a report")
+    return result["final_report"]
+
+
+async def execute_screening(
+    db: Session,
+    *,
+    context: ScreeningExecutionContext,
+    graph: object | None = None,
+) -> CandidateReportResponse:
+    """Execute LangGraph outside the request lifecycle and persist real node progress."""
+
+    _persist_stage(
+        db,
+        run_id=context.run_id,
+        stage=ScreeningStage.NORMALIZE_REQUIREMENTS,
+    )
+
+    async def node_completed(node_name: str) -> None:
+        next_stage = _NEXT_STAGE.get(node_name)
+        if next_stage is not None:
+            _persist_stage(db, run_id=context.run_id, stage=next_stage)
+
+    try:
+        screening_graph = graph or get_recruitment_graph()
+        report_payload = await _stream_graph(
+            screening_graph,
+            initial_state=context.initial_state,
+            on_node_completed=node_completed,
+        )
+        report = ScreeningReport.model_validate(report_payload)
+        run = db.get(ScreeningRun, context.run_id)
+        if run is None:
+            raise ScreeningExecutionError("Screening run was not found")
+        completed_run = screening_persistence_service.persist_completed_report(
+            db,
+            run=run,
+            report=report,
+            valid_requirement_ids=context.valid_requirement_ids,
+        )
+    except asyncio.CancelledError as exc:
+        _record_failed_run(
+            db,
+            run_id=context.run_id,
+            candidate_id=context.candidate_id,
+            exc=exc,
+        )
+        raise
+    except (AIConfigurationError, AIProviderError, AIStructuredOutputError) as exc:
+        _record_failed_run(
+            db,
+            run_id=context.run_id,
+            candidate_id=context.candidate_id,
+            exc=exc,
+        )
+        raise
+    except (KeyError, TypeError, ValidationError) as exc:
+        _record_failed_run(
+            db,
+            run_id=context.run_id,
+            candidate_id=context.candidate_id,
+            exc=exc,
+        )
+        raise ScreeningExecutionError("Candidate screening failed") from exc
+    except screening_persistence_service.ScreeningPersistenceError as exc:
+        _record_failed_run(
+            db,
+            run_id=context.run_id,
+            candidate_id=context.candidate_id,
+            exc=exc,
+        )
+        raise ScreeningExecutionError("Candidate screening failed") from exc
+    except ScreeningExecutionError as exc:
+        _record_failed_run(
+            db,
+            run_id=context.run_id,
+            candidate_id=context.candidate_id,
+            exc=exc,
+        )
+        raise
+    except Exception as exc:
+        _record_failed_run(
+            db,
+            run_id=context.run_id,
+            candidate_id=context.candidate_id,
+            exc=exc,
+        )
+        raise ScreeningExecutionError("Candidate screening failed") from exc
+
+    logger.info(
+        "screening_completed",
+        extra={
+            "candidate_id": context.candidate_id,
+            "screening_run_id": context.run_id,
+        },
+    )
+    return _build_report_or_error(completed_run)
+
+
 async def screen_candidate(
     db: Session,
     *,
@@ -148,50 +362,55 @@ async def screen_candidate(
     user_id: int,
     graph: object | None = None,
 ) -> CandidateReportResponse:
-    """Create a run, execute the graph outside a transaction, and persist it."""
+    """Synchronous service helper retained for deterministic service-level tests."""
 
-    run, initial_state, valid_requirement_ids = _start_screening(
+    _, context = start_candidate_screening(
         db,
         candidate_id=candidate_id,
         user_id=user_id,
     )
-    logger.info(
-        "screening_started",
-        extra={
-            "candidate_id": candidate_id,
-            "job_id": initial_state["job_id"],
-            "screening_run_id": run.id,
-        },
-    )
+    return await execute_screening(db, context=context, graph=graph)
 
+
+async def _background_screening(
+    context: ScreeningExecutionContext,
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as db:
+        try:
+            await execute_screening(db, context=context)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Safe failure state and structured metadata are already persisted.
+            return
+
+
+def _discard_background_task(task: asyncio.Task[None]) -> None:
+    _background_tasks.discard(task)
+    if task.cancelled():
+        return
     try:
-        screening_graph = graph or get_recruitment_graph()
-        result = await screening_graph.ainvoke(initial_state)  # type: ignore[union-attr]
-        report = ScreeningReport.model_validate(result["final_report"])
-        completed_run = screening_persistence_service.persist_completed_report(
-            db,
-            run=run,
-            report=report,
-            valid_requirement_ids=valid_requirement_ids,
-        )
-    except (AIConfigurationError, AIProviderError, AIStructuredOutputError) as exc:
-        _record_failed_run(db, run_id=run.id, candidate_id=candidate_id, exc=exc)
-        raise
-    except (KeyError, TypeError, ValidationError) as exc:
-        _record_failed_run(db, run_id=run.id, candidate_id=candidate_id, exc=exc)
-        raise ScreeningExecutionError("Candidate screening failed") from exc
-    except screening_persistence_service.ScreeningPersistenceError as exc:
-        _record_failed_run(db, run_id=run.id, candidate_id=candidate_id, exc=exc)
-        raise ScreeningExecutionError("Candidate screening failed") from exc
-    except Exception as exc:
-        _record_failed_run(db, run_id=run.id, candidate_id=candidate_id, exc=exc)
-        raise ScreeningExecutionError("Candidate screening failed") from exc
+        task.result()
+    except Exception:
+        logger.exception("Unexpected unhandled background screening failure")
 
-    logger.info(
-        "screening_completed",
-        extra={"candidate_id": candidate_id, "screening_run_id": run.id},
+
+def schedule_screening(
+    context: ScreeningExecutionContext,
+    *,
+    bind: Engine | Connection,
+) -> None:
+    """Keep a strong task reference while an in-process screening is active."""
+
+    session_factory = sessionmaker(
+        bind=bind,
+        autoflush=False,
+        expire_on_commit=False,
     )
-    return _build_report_or_error(completed_run)
+    task = asyncio.create_task(_background_screening(context, session_factory))
+    _background_tasks.add(task)
+    task.add_done_callback(_discard_background_task)
 
 
 def _record_failed_run(
@@ -199,7 +418,7 @@ def _record_failed_run(
     *,
     run_id: int,
     candidate_id: int,
-    exc: Exception,
+    exc: BaseException,
 ) -> None:
     logger.warning(
         "screening_failed",
@@ -266,15 +485,38 @@ def list_screening_runs(
     ]
 
 
-def get_screening_report(
+def get_screening_result(
     db: Session, *, candidate_id: int, screening_run_id: int, user_id: int
-) -> CandidateReportResponse:
+) -> ScreeningRunResponse | CandidateReportResponse:
     _candidate_for_user_or_error(db, candidate_id=candidate_id, user_id=user_id)
-    run = screening_runs.get_completed(
+    run = screening_runs.get_for_candidate(
         db,
         candidate_id=candidate_id,
         screening_run_id=screening_run_id,
     )
     if run is None:
+        raise ScreeningReportNotFoundError("Screening run not found")
+    if run.status != ScreeningRunStatus.COMPLETED:
+        return ScreeningRunResponse.model_validate(run)
+    completed = screening_runs.get_completed(
+        db,
+        candidate_id=candidate_id,
+        screening_run_id=screening_run_id,
+    )
+    if completed is None:
+        raise ScreeningExecutionError("Completed screening report is incomplete")
+    return _build_report_or_error(completed)
+
+
+def get_screening_report(
+    db: Session, *, candidate_id: int, screening_run_id: int, user_id: int
+) -> CandidateReportResponse:
+    result = get_screening_result(
+        db,
+        candidate_id=candidate_id,
+        screening_run_id=screening_run_id,
+        user_id=user_id,
+    )
+    if isinstance(result, ScreeningRunResponse):
         raise ScreeningReportNotFoundError("Completed screening report not found")
-    return _build_report_or_error(run)
+    return result

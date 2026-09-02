@@ -3,11 +3,12 @@ import Link from "next/link";
 import { EmptyState } from "@/components/ui/empty-state";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { candidateDisplayName, formatDate } from "@/lib/format";
-import type { Candidate, ResumeMetadata } from "@/types/api";
+import type { Candidate, ResumeMetadata, ScreeningRun } from "@/types/api";
 
 export interface CandidateRow {
   candidate: Candidate;
   resume: ResumeMetadata | null;
+  activeRun: ScreeningRun | null;
 }
 
 export function CandidateTable({
@@ -15,11 +16,13 @@ export function CandidateTable({
   screeningCandidateId,
   screeningErrors,
   onScreen,
+  onViewProgress,
 }: {
   rows: CandidateRow[];
   screeningCandidateId: number | null;
   screeningErrors: Record<number, string>;
   onScreen: (candidate: Candidate) => void;
+  onViewProgress: (candidate: Candidate, run: ScreeningRun | null) => void;
 }) {
   if (rows.length === 0) {
     return (
@@ -44,7 +47,7 @@ export function CandidateTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map(({ candidate, resume }) => {
+          {rows.map(({ candidate, resume, activeRun }) => {
             const isScreening = screeningCandidateId === candidate.id;
             const resumeReady = resume?.extraction_status === "completed";
             return (
@@ -89,12 +92,20 @@ export function CandidateTable({
                     <Link className="button button-small button-secondary" href={`/candidates/${candidate.id}`}>
                       {candidate.status === "completed" ? "View report" : "View"}
                     </Link>
-                    {candidate.status !== "completed" ? (
+                    {candidate.status === "processing" ? (
+                      <button
+                        className="button button-small button-primary"
+                        type="button"
+                        onClick={() => onViewProgress(candidate, activeRun)}
+                      >
+                        View progress
+                      </button>
+                    ) : candidate.status !== "completed" ? (
                       <button
                         className="button button-small button-primary"
                         type="button"
                         disabled={
-                          isScreening || candidate.status === "processing" || !resumeReady
+                          isScreening || !resumeReady
                         }
                         title={!resumeReady ? "A successfully extracted resume is required" : undefined}
                         onClick={() => onScreen(candidate)}

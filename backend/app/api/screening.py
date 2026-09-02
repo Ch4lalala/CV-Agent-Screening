@@ -2,13 +2,12 @@
 
 from fastapi import APIRouter, HTTPException, status
 
-from app.ai.exceptions import (
-    AIConfigurationError,
-    AIProviderError,
-    AIStructuredOutputError,
-)
 from app.api.dependencies import DatabaseSession, DevelopmentUser
-from app.schemas.screening import CandidateReportResponse, ScreeningRunResponse
+from app.schemas.screening import (
+    CandidateReportResponse,
+    ScreeningRunResponse,
+    ScreeningStartResponse,
+)
 from app.services import screening_service
 
 router = APIRouter(tags=["screening"])
@@ -16,19 +15,22 @@ router = APIRouter(tags=["screening"])
 
 @router.post(
     "/candidates/{candidate_id}/screen",
-    response_model=CandidateReportResponse,
+    response_model=ScreeningStartResponse,
+    status_code=status.HTTP_202_ACCEPTED,
 )
 async def screen_candidate(
     candidate_id: int,
     db: DatabaseSession,
     user: DevelopmentUser,
-) -> CandidateReportResponse:
+) -> ScreeningStartResponse:
     try:
-        return await screening_service.screen_candidate(
+        response, context = screening_service.start_candidate_screening(
             db,
             candidate_id=candidate_id,
             user_id=user.id,
         )
+        screening_service.schedule_screening(context, bind=db.get_bind())
+        return response
     except screening_service.ScreeningInputNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -43,16 +45,6 @@ async def screen_candidate(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
-        ) from exc
-    except AIConfigurationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="AI service is not configured",
-        ) from exc
-    except (AIProviderError, AIStructuredOutputError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="AI screening is temporarily unavailable",
         ) from exc
     except screening_service.ScreeningExecutionError as exc:
         raise HTTPException(
@@ -116,16 +108,16 @@ def list_screenings(
 
 @router.get(
     "/candidates/{candidate_id}/screenings/{screening_run_id}",
-    response_model=CandidateReportResponse,
+    response_model=ScreeningRunResponse | CandidateReportResponse,
 )
 def get_screening(
     candidate_id: int,
     screening_run_id: int,
     db: DatabaseSession,
     user: DevelopmentUser,
-) -> CandidateReportResponse:
+) -> ScreeningRunResponse | CandidateReportResponse:
     try:
-        return screening_service.get_screening_report(
+        return screening_service.get_screening_result(
             db,
             candidate_id=candidate_id,
             screening_run_id=screening_run_id,

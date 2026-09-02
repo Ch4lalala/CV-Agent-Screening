@@ -14,6 +14,7 @@ from app.models.enums import (
     EvidenceStatus,
     RequirementType,
     ScreeningRunStatus,
+    ScreeningStage,
 )
 from app.models.evidence_item import EvidenceItem
 from app.models.evidence_result import EvidenceResult
@@ -92,6 +93,8 @@ def persist_completed_report(
 
         run.report_json = report.model_dump(mode="json")
         run.status = ScreeningRunStatus.COMPLETED
+        run.current_stage = ScreeningStage.COMPLETED
+        run.current_stage_updated_at = datetime.now(UTC)
         run.finished_at = datetime.now(UTC)
         run.error_message = None
 
@@ -124,6 +127,8 @@ def mark_failed(
         return
 
     run.status = ScreeningRunStatus.FAILED
+    run.current_stage = ScreeningStage.FAILED
+    run.current_stage_updated_at = datetime.now(UTC)
     run.finished_at = datetime.now(UTC)
     run.error_message = error_message
     if screening_runs.latest_run_id(db, candidate_id=candidate_id) == run.id:

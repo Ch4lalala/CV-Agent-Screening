@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -25,6 +26,36 @@ class FakeGraph:
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
+
+    async def astream(self, _: object, *, stream_mode: str):
+        assert stream_mode == "updates"
+        self.calls += 1
+        if isinstance(self.result, Exception):
+            raise self.result
+        for node in (
+            "normalize_requirements",
+            "extract_candidate_profile",
+            "match_evidence",
+            "analyze_uncertainty",
+            "generate_interview_questions",
+        ):
+            yield {node: {}}
+        yield {"generate_report": self.result}
+
+
+def wait_for_run(client: TestClient, candidate_id: int, run_id: int) -> dict[str, object]:
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        response = client.get(
+            f"/api/v1/candidates/{candidate_id}/screenings/{run_id}"
+        )
+        assert response.status_code == 200
+        body = response.json()
+        status = body.get("status", body.get("screening_run", {}).get("status"))
+        if status != "processing":
+            return body
+        time.sleep(0.01)
+    raise AssertionError("Screening run did not finish")
 
 
 def create_candidate_with_resume(
@@ -150,8 +181,14 @@ def test_screening_missing_ai_configuration_is_sanitized(
 
     response = client.post(f"/api/v1/candidates/{candidate.id}/screen")
 
-    assert response.status_code == 503
-    assert response.json() == {"detail": "AI service is not configured"}
+    assert response.status_code == 202
+    result = wait_for_run(
+        client,
+        candidate.id,
+        response.json()["screening_run_id"],
+    )
+    assert result["status"] == "failed"
+    assert result["error_message"] == "AI service is not configured."
     assert "AI_API_KEY" not in response.text
     get_ai_settings.cache_clear()
     get_chat_model.cache_clear()
@@ -175,9 +212,15 @@ def test_screening_provider_failure_is_sanitized(
 
     response = client.post(f"/api/v1/candidates/{candidate.id}/screen")
 
-    assert response.status_code == 503
-    assert response.json() == {"detail": "AI screening is temporarily unavailable"}
-    assert "private-secret" not in response.text
+    assert response.status_code == 202
+    result = wait_for_run(
+        client,
+        candidate.id,
+        response.json()["screening_run_id"],
+    )
+    assert result["status"] == "failed"
+    assert result["error_message"] == "AI provider is temporarily unavailable."
+    assert "private-secret" not in str(result)
 
 
 def test_screening_returns_persisted_report_and_changes_status(
@@ -196,10 +239,16 @@ def test_screening_returns_persisted_report_and_changes_status(
 
     response = client.post(f"/api/v1/candidates/{candidate.id}/screen")
 
-    assert response.status_code == 200
-    assert response.json()["candidate"]["id"] == candidate.id
-    assert response.json()["screening_run"]["status"] == "completed"
-    assert "decision" not in response.json()
+    assert response.status_code == 202
+    result = wait_for_run(
+        client,
+        candidate.id,
+        response.json()["screening_run_id"],
+    )
+    assert result["candidate"]["id"] == candidate.id
+    assert result["screening_run"]["status"] == "completed"
+    assert result["screening_run"]["current_stage"] == "completed"
+    assert "decision" not in result
     db_session.refresh(candidate)
     assert candidate.status == CandidateStatus.COMPLETED
     run = db_session.query(ScreeningRun).one()

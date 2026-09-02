@@ -6,23 +6,45 @@ import { useCallback, useEffect, useState } from "react";
 
 import { CandidateTable, type CandidateRow } from "@/components/candidates/candidate-table";
 import { CandidateUpload } from "@/components/candidates/candidate-upload";
+import { RequirementManager } from "@/components/jobs/requirement-manager";
 import { PageHeader } from "@/components/layout/page-header";
 import { AnalysisWorkflow } from "@/components/screening/analysis-workflow";
 import { Alert } from "@/components/ui/alert";
 import { LoadingState } from "@/components/ui/loading-state";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { RequirementManager } from "@/components/jobs/requirement-manager";
 import {
   getCandidateResume,
   getCandidates,
   getErrorMessage,
   getJob,
   getRequirements,
+  getScreeningHistory,
+  getScreeningProgress,
   screenCandidate,
   updateJob,
 } from "@/lib/api/client";
 import { candidateDisplayName, formatDate } from "@/lib/format";
-import type { Candidate, Job, JobRequirement, JobStatus } from "@/types/api";
+import type {
+  Candidate,
+  CandidateReport,
+  Job,
+  JobRequirement,
+  JobStatus,
+  ScreeningRun,
+  ScreeningRunStatus,
+  ScreeningStage,
+} from "@/types/api";
+
+interface ProgressState {
+  runId: number | null;
+  status: ScreeningRunStatus;
+  currentStage: ScreeningStage;
+}
+
+function progressFromResponse(response: ScreeningRun | CandidateReport): ProgressState {
+  const run = "screening_run" in response ? response.screening_run : response;
+  return { runId: run.id, status: run.status, currentStage: run.current_stage };
+}
 
 export function JobDetailClient({ jobId }: { jobId: number }) {
   const router = useRouter();
@@ -32,7 +54,11 @@ export function JobDetailClient({ jobId }: { jobId: number }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusSaving, setStatusSaving] = useState(false);
-  const [screeningCandidate, setScreeningCandidate] = useState<Candidate | null>(null);
+  const [initiatingCandidateId, setInitiatingCandidateId] = useState<number | null>(null);
+  const [progressCandidate, setProgressCandidate] = useState<Candidate | null>(null);
+  const [progress, setProgress] = useState<ProgressState | null>(null);
+  const [progressOpen, setProgressOpen] = useState(false);
+  const [backgroundNotice, setBackgroundNotice] = useState<string | null>(null);
   const [screeningErrors, setScreeningErrors] = useState<Record<number, string>>({});
 
   const loadRequirements = useCallback(async () => {
@@ -43,11 +69,17 @@ export function JobDetailClient({ jobId }: { jobId: number }) {
     const candidates = await getCandidates(jobId);
     const rows = await Promise.all(
       candidates.map(async (candidate): Promise<CandidateRow> => {
-        try {
-          return { candidate, resume: await getCandidateResume(candidate.id) };
-        } catch {
-          return { candidate, resume: null };
-        }
+        const [resume, history] = await Promise.all([
+          getCandidateResume(candidate.id).catch(() => null),
+          candidate.status === "processing"
+            ? getScreeningHistory(candidate.id).catch(() => [])
+            : Promise.resolve([]),
+        ]);
+        return {
+          candidate,
+          resume,
+          activeRun: history.find((run) => run.status === "processing") ?? null,
+        };
       }),
     );
     setCandidateRows(rows);
@@ -74,6 +106,61 @@ export function JobDetailClient({ jobId }: { jobId: number }) {
     void loadPage();
   }, [loadPage]);
 
+  const hasProcessingCandidate = candidateRows.some(
+    ({ candidate }) => candidate.status === "processing",
+  );
+
+  useEffect(() => {
+    if (!hasProcessingCandidate) {
+      return;
+    }
+    const interval = window.setInterval(() => void loadCandidates(), 2000);
+    return () => window.clearInterval(interval);
+  }, [hasProcessingCandidate, loadCandidates]);
+
+  useEffect(() => {
+    if (!progressCandidate || !progress?.runId || progress.status !== "processing") {
+      return;
+    }
+    const candidateId = progressCandidate.id;
+    const candidateName = candidateDisplayName(
+      progressCandidate.name,
+      progressCandidate.original_filename,
+    );
+    const runId = progress.runId;
+    let stopped = false;
+
+    async function poll() {
+      try {
+        const response = await getScreeningProgress(candidateId, runId);
+        if (stopped) {
+          return;
+        }
+        const next = progressFromResponse(response);
+        setProgress(next);
+        if (next.status !== "processing") {
+          await loadCandidates();
+          if (!progressOpen) {
+            setBackgroundNotice(
+              next.status === "completed"
+                ? `Screening for ${candidateName} is complete.`
+                : "Screening could not be completed. You can retry from the candidate row.",
+            );
+          }
+        }
+      } catch {
+        // A later poll or page refresh can recover from a transient read failure.
+      }
+    }
+
+    void poll();
+    const interval = window.setInterval(() => void poll(), 1500);
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+    };
+  }, [loadCandidates, progress?.runId, progress?.status, progressCandidate, progressOpen]);
+
   async function handleStatusChange(status: JobStatus) {
     if (!job || status === job.status) {
       return;
@@ -89,26 +176,76 @@ export function JobDetailClient({ jobId }: { jobId: number }) {
   }
 
   async function handleScreen(candidate: Candidate) {
-    setScreeningCandidate(candidate);
+    setProgressCandidate(candidate);
+    setProgress({ runId: null, status: "processing", currentStage: "queued" });
+    setProgressOpen(true);
+    setBackgroundNotice(null);
+    setInitiatingCandidateId(candidate.id);
     setScreeningErrors((current) => ({ ...current, [candidate.id]: "" }));
     try {
-      await screenCandidate(candidate.id);
-      router.push(`/candidates/${candidate.id}`);
+      const started = await screenCandidate(candidate.id);
+      setProgress({
+        runId: started.screening_run_id,
+        status: started.status,
+        currentStage: started.current_stage,
+      });
+      setCandidateRows((current) =>
+        current.map((row) =>
+          row.candidate.id === candidate.id
+            ? {
+                ...row,
+                candidate: { ...row.candidate, status: "processing" },
+              }
+            : row,
+        ),
+      );
     } catch (screenError) {
+      setProgressOpen(false);
+      setProgress(null);
       setScreeningErrors((current) => ({
         ...current,
         [candidate.id]: getErrorMessage(
           screenError,
-          "The AI analysis could not be completed. Try screening again.",
+          "The screening run could not be started. Try again.",
         ),
       }));
-      try {
-        await loadCandidates();
-      } catch {
-        setError("Screening failed, and the candidate list could not be refreshed. Reload the page to see the latest state.");
-      }
+      await loadCandidates().catch(() => undefined);
     } finally {
-      setScreeningCandidate(null);
+      setInitiatingCandidateId(null);
+    }
+  }
+
+  async function handleViewProgress(candidate: Candidate, run: ScreeningRun | null) {
+    setProgressCandidate(candidate);
+    setBackgroundNotice(null);
+    if (run) {
+      setProgress({ runId: run.id, status: run.status, currentStage: run.current_stage });
+      setProgressOpen(true);
+      return;
+    }
+    try {
+      const history = await getScreeningHistory(candidate.id);
+      const active = history.find((item) => item.status === "processing") ?? history[0];
+      if (active) {
+        setProgress({
+          runId: active.id,
+          status: active.status,
+          currentStage: active.current_stage,
+        });
+        setProgressOpen(true);
+      }
+    } catch {
+      setScreeningErrors((current) => ({
+        ...current,
+        [candidate.id]: "Unable to load screening progress. Try again.",
+      }));
+    }
+  }
+
+  function closeProgress() {
+    setProgressOpen(false);
+    if (progress?.status === "processing") {
+      setBackgroundNotice("Screening continues in the background.");
     }
   }
 
@@ -125,14 +262,26 @@ export function JobDetailClient({ jobId }: { jobId: number }) {
     );
   }
 
+  const progressName = progressCandidate
+    ? candidateDisplayName(progressCandidate.name, progressCandidate.original_filename)
+    : "candidate";
+
   return (
     <div className="page-stack">
-      {screeningCandidate ? (
+      {progressOpen && progress ? (
         <AnalysisWorkflow
-          candidateName={candidateDisplayName(
-            screeningCandidate.name,
-            screeningCandidate.original_filename,
-          )}
+          candidateName={progressName}
+          status={progress.status}
+          currentStage={progress.currentStage}
+          onClose={closeProgress}
+          onViewReport={
+            progressCandidate
+              ? () => router.push(`/candidates/${progressCandidate.id}`)
+              : undefined
+          }
+          onRetry={
+            progressCandidate ? () => void handleScreen(progressCandidate) : undefined
+          }
         />
       ) : null}
 
@@ -166,6 +315,9 @@ export function JobDetailClient({ jobId }: { jobId: number }) {
       />
 
       {error ? <Alert>{error}</Alert> : null}
+      {backgroundNotice ? (
+        <Alert tone="info" title="Background screening">{backgroundNotice}</Alert>
+      ) : null}
 
       <section className="job-brief panel" aria-labelledby="job-brief-title">
         <div className="job-brief-label">
@@ -191,15 +343,16 @@ export function JobDetailClient({ jobId }: { jobId: number }) {
           <div>
             <p className="section-kicker">Recruiter review queue</p>
             <h2 id="candidate-list-title">Candidates</h2>
-            <p>Screen one candidate at a time and review evidence before any human decision.</p>
+            <p>Screen candidates in the background and review evidence before any human decision.</p>
           </div>
           <span className="section-count">{candidateRows.length} candidates</span>
         </div>
         <CandidateTable
           rows={candidateRows}
-          screeningCandidateId={screeningCandidate?.id ?? null}
+          screeningCandidateId={initiatingCandidateId}
           screeningErrors={screeningErrors}
           onScreen={(candidate) => void handleScreen(candidate)}
+          onViewProgress={(candidate, run) => void handleViewProgress(candidate, run)}
         />
       </section>
     </div>

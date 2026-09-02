@@ -1392,12 +1392,35 @@ blockquote {
 }
 
 .analysis-dialog {
+  position: relative;
   width: min(100%, 510px);
   padding: 34px;
   background: var(--surface);
   border-radius: 18px;
   box-shadow: 0 28px 80px rgba(0, 0, 0, 0.25);
   text-align: center;
+}
+
+.analysis-close {
+  position: absolute;
+  top: 15px;
+  right: 16px;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  color: var(--muted-strong);
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.analysis-close:hover {
+  color: var(--text);
+  border-color: var(--brand);
 }
 
 .agent-orbit {
@@ -1410,7 +1433,20 @@ blockquote {
   border: 1px solid #b7ddc9;
   border-radius: 50%;
   box-shadow: 0 0 0 9px rgba(23, 107, 74, 0.06);
-  animation: breathe 1.8s ease-in-out infinite;
+}
+
+.agent-orbit-complete {
+  background: #eaf7ef;
+  border-color: #9bcfaf;
+}
+
+.agent-orbit-failed {
+  background: #fff1ee;
+  border-color: #edb5a9;
+}
+
+.agent-orbit-failed span {
+  background: var(--danger);
 }
 
 .agent-orbit span {
@@ -1440,7 +1476,7 @@ blockquote {
 
 .workflow-list {
   display: grid;
-  gap: 2px;
+  gap: 5px;
   text-align: left;
 }
 
@@ -1449,13 +1485,15 @@ blockquote {
   display: flex;
   align-items: center;
   gap: 11px;
-  padding: 7px 10px;
+  min-height: 43px;
+  padding: 8px 11px;
   color: var(--muted-strong);
   background: var(--surface-subtle);
+  border: 1px solid transparent;
   border-radius: 8px;
 }
 
-.workflow-step span {
+.workflow-step-icon {
   display: grid;
   width: 21px;
   height: 21px;
@@ -1467,16 +1505,63 @@ blockquote {
   font-weight: 800;
 }
 
+.workflow-step-current {
+  color: var(--text);
+  background: var(--brand-soft);
+  border-color: #acd8bf;
+  box-shadow: 0 6px 18px rgba(23, 107, 74, 0.08);
+}
+
+.workflow-step-completed .workflow-step-icon {
+  color: #ffffff;
+  background: var(--brand);
+}
+
+.workflow-step-waiting {
+  color: var(--muted);
+  background: #fafbf9;
+}
+
+.workflow-step-waiting .workflow-step-icon {
+  color: #9aa69f;
+  background: #eef1ef;
+}
+
+.workflow-step-icon i {
+  width: 11px;
+  height: 11px;
+  border: 2px solid rgba(23, 107, 74, 0.25);
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
 .workflow-step p {
+  flex: 1;
   margin: 0;
   font-size: 11px;
   font-weight: 650;
+}
+
+.workflow-step small {
+  color: inherit;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .workflow-note {
   margin: 15px 0 0;
   color: var(--muted);
   font-size: 9px;
+}
+
+.analysis-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: 20px;
 }
 
 .candidate-summary-bar {
