@@ -1,49 +1,88 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { CandidateTable, type CandidateRow } from "@/components/candidates/candidate-table";
+import {
+  CandidateTable,
+  sortComparisonCandidates,
+} from "@/components/candidates/candidate-table";
+import type { CandidateComparisonItem } from "@/types/api";
 
-const baseCandidate = {
-  id: 7,
-  job_id: 3,
-  name: "Budi",
-  email: "budi@example.com",
-  original_filename: "budi.pdf",
-  created_at: "2026-09-02T00:00:00Z",
-  updated_at: "2026-09-02T00:00:00Z",
-} as const;
+function candidate(
+  overrides: Partial<CandidateComparisonItem> = {},
+): CandidateComparisonItem {
+  return {
+    candidate_id: 7,
+    name: "Budi",
+    email: "budi@example.com",
+    original_filename: "budi.pdf",
+    status: "completed",
+    created_at: "2026-09-02T00:00:00Z",
+    resume_extraction_status: "completed",
+    latest_completed_run_id: 10,
+    latest_completed_at: "2026-09-02T00:00:10Z",
+    active_screening_run_id: null,
+    active_screening_stage: null,
+    active_screening_stage_updated_at: null,
+    required: { supported: 4, partial: 0, no_evidence: 0, total: 4 },
+    preferred: { supported: 2, partial: 0, no_evidence: 1, total: 3 },
+    needs_verification_count: 1,
+    review_priority: 1,
+    review_label: "strong_evidence",
+    comparable_evidence: false,
+    ...overrides,
+  };
+}
 
-const resume = {
-  original_filename: "budi.pdf",
-  page_count: 1,
-  extraction_status: "completed" as const,
-  text_length: 120,
-  message: null,
-};
+describe("CandidateTable comparison and screening actions", () => {
+  it("renders transparent counts and no unexplained score", () => {
+    const unscreened = candidate({
+      candidate_id: 8,
+      name: "Unscreened",
+      status: "uploaded",
+      latest_completed_run_id: null,
+      latest_completed_at: null,
+      required: null,
+      preferred: null,
+      needs_verification_count: null,
+      review_priority: null,
+      review_label: null,
+    });
+    render(
+      <CandidateTable
+        rows={[candidate(), unscreened]}
+        screeningCandidateId={null}
+        screeningErrors={{}}
+        onScreen={vi.fn()}
+        onViewProgress={vi.fn()}
+      />,
+    );
 
-describe("CandidateTable screening actions", () => {
+    const screenedRow = screen.getByText("Budi").closest("tr");
+    expect(screenedRow).not.toBeNull();
+    expect(within(screenedRow!).getByText("4/4 supported")).toBeInTheDocument();
+    expect(within(screenedRow!).getByText("2/3 supported")).toBeInTheDocument();
+    expect(within(screenedRow!).getByText("Priority 1 · Strong Evidence")).toBeInTheDocument();
+    const unscreenedRow = screen.getByText("Unscreened").closest("tr");
+    expect(unscreenedRow).not.toBeNull();
+    expect(within(unscreenedRow!).getAllByText("—")).toHaveLength(3);
+    expect(document.body.textContent).not.toMatch(/fit score|hire score|%/i);
+  });
+
   it("replaces Screen with View progress for an authoritative processing row", async () => {
-    const run = {
-      id: 11,
-      candidate_id: 7,
-      status: "processing" as const,
-      current_stage: "match_evidence" as const,
-      current_stage_updated_at: "2026-09-02T00:00:02Z",
-      model_name: "test-model",
-      started_at: "2026-09-02T00:00:00Z",
-      finished_at: null,
-      error_message: null,
-      created_at: "2026-09-02T00:00:00Z",
-    };
-    const rows: CandidateRow[] = [
-      { candidate: { ...baseCandidate, status: "processing" }, resume, activeRun: run },
-    ];
+    const row = candidate({
+      status: "processing",
+      review_priority: null,
+      review_label: null,
+      active_screening_run_id: 11,
+      active_screening_stage: "match_evidence",
+      active_screening_stage_updated_at: "2026-09-02T00:00:02Z",
+    });
     const viewProgress = vi.fn();
     const user = userEvent.setup();
     render(
       <CandidateTable
-        rows={rows}
+        rows={[row]}
         screeningCandidateId={null}
         screeningErrors={{}}
         onScreen={vi.fn()}
@@ -53,24 +92,55 @@ describe("CandidateTable screening actions", () => {
 
     expect(screen.queryByRole("button", { name: "Screen" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "View progress" }));
-    expect(viewProgress).toHaveBeenCalledWith(rows[0].candidate, run);
+    expect(viewProgress).toHaveBeenCalledWith(row);
   });
 
   it("offers Retry after a failed run", async () => {
-    const candidate = { ...baseCandidate, status: "failed" as const };
-    const screenCandidate = vi.fn();
+    const row = candidate({
+      status: "failed",
+      review_priority: null,
+      review_label: null,
+    });
+    const startScreening = vi.fn();
     const user = userEvent.setup();
     render(
       <CandidateTable
-        rows={[{ candidate, resume, activeRun: null }]}
+        rows={[row]}
         screeningCandidateId={null}
         screeningErrors={{}}
-        onScreen={screenCandidate}
+        onScreen={startScreening}
         onViewProgress={vi.fn()}
       />,
     );
 
     await user.click(screen.getByRole("button", { name: "Retry" }));
-    expect(screenCandidate).toHaveBeenCalledWith(candidate);
+    expect(startScreening).toHaveBeenCalledWith(row);
+  });
+
+  it("supports recommended, newest, and stable name sorting", async () => {
+    const recommended = candidate({ name: "Zulu", candidate_id: 1, review_priority: 1 });
+    const newest = candidate({
+      name: "Alpha",
+      candidate_id: 2,
+      created_at: "2026-09-03T00:00:00Z",
+      review_priority: 2,
+    });
+    expect(sortComparisonCandidates([newest, recommended], "recommended")[0]).toBe(recommended);
+    expect(sortComparisonCandidates([newest, recommended], "newest")[0]).toBe(newest);
+    expect(sortComparisonCandidates([recommended, newest], "name")[0]).toBe(newest);
+
+    const user = userEvent.setup();
+    render(
+      <CandidateTable
+        rows={[recommended, newest]}
+        screeningCandidateId={null}
+        screeningErrors={{}}
+        onScreen={vi.fn()}
+        onViewProgress={vi.fn()}
+      />,
+    );
+    await user.selectOptions(screen.getByLabelText("Sort candidates"), "name");
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(within(rows[0]).getByText("Alpha")).toBeInTheDocument();
   });
 });

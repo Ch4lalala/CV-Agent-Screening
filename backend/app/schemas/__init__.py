@@ -5,6 +5,11 @@ from app.schemas.candidate import (
     CandidateUploadMetadata,
     CandidateUploadResponse,
 )
+from app.schemas.candidate_comparison import (
+    CandidateComparisonItemResponse,
+    CandidateComparisonResponse,
+    CoverageCountsResponse,
+)
 from app.schemas.job import JobCreate, JobResponse, JobUpdate
 from app.schemas.job_requirement import (
     JobRequirementCreate,
@@ -25,7 +30,10 @@ __all__ = [
     "CandidateUpdate",
     "CandidateUploadMetadata",
     "CandidateUploadResponse",
+    "CandidateComparisonItemResponse",
+    "CandidateComparisonResponse",
     "CandidateReportResponse",
+    "CoverageCountsResponse",
     "JobCreate",
     "JobRequirementCreate",
     "JobRequirementResponse",

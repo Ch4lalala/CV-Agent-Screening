@@ -1,5 +1,6 @@
 import type {
   Candidate,
+  CandidateComparison,
   CandidateReport,
   CandidateUploadResponse,
   Job,
@@ -176,6 +177,9 @@ export const deleteRequirement = (jobId: number, requirementId: number) =>
 
 export const getCandidates = (jobId: number) =>
   request<Candidate[]>(`/api/v1/jobs/${jobId}/candidates`);
+
+export const getCandidateComparison = (jobId: number) =>
+  request<CandidateComparison>(`/api/v1/jobs/${jobId}/candidate-comparison`);
 
 export const getCandidate = (candidateId: number) =>
   request<Candidate>(`/api/v1/candidates/${candidateId}`);

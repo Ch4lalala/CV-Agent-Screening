@@ -20,7 +20,8 @@ from app.schemas.job_requirement import (
     JobRequirementUpdate,
 )
 from app.schemas.job_import import JobDescriptionAnalysisRequest, JobImportDraft
-from app.services import job_document_service, resume_service
+from app.schemas.candidate_comparison import CandidateComparisonResponse
+from app.services import candidate_comparison_service, job_document_service, resume_service
 from app.services.job_import_service import generate_job_import_draft
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -148,6 +149,19 @@ async def import_job_document(
 @router.get("/{job_id}", response_model=JobResponse)
 def get_job(job_id: int, db: DatabaseSession, user: DevelopmentUser) -> Job:
     return _get_job_or_404(db, user, job_id)
+
+
+@router.get(
+    "/{job_id}/candidate-comparison",
+    response_model=CandidateComparisonResponse,
+)
+def get_candidate_comparison(
+    job_id: int,
+    db: DatabaseSession,
+    user: DevelopmentUser,
+) -> CandidateComparisonResponse:
+    _get_job_or_404(db, user, job_id)
+    return candidate_comparison_service.get_candidate_comparison(db, job_id=job_id)
 
 
 @router.patch("/{job_id}", response_model=JobResponse)

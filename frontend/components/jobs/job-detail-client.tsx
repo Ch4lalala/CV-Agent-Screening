@@ -4,8 +4,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
-import { CandidateTable, type CandidateRow } from "@/components/candidates/candidate-table";
+import { CandidateTable } from "@/components/candidates/candidate-table";
 import { CandidateUpload } from "@/components/candidates/candidate-upload";
+import { RecommendedForReview } from "@/components/candidates/recommended-for-review";
 import { RequirementManager } from "@/components/jobs/requirement-manager";
 import { PageHeader } from "@/components/layout/page-header";
 import { AnalysisWorkflow } from "@/components/screening/analysis-workflow";
@@ -13,19 +14,17 @@ import { Alert } from "@/components/ui/alert";
 import { LoadingState } from "@/components/ui/loading-state";
 import { StatusBadge } from "@/components/ui/status-badge";
 import {
-  getCandidateResume,
-  getCandidates,
+  getCandidateComparison,
   getErrorMessage,
   getJob,
   getRequirements,
-  getScreeningHistory,
   getScreeningProgress,
   screenCandidate,
   updateJob,
 } from "@/lib/api/client";
 import { candidateDisplayName, formatDate } from "@/lib/format";
 import type {
-  Candidate,
+  CandidateComparisonItem,
   CandidateReport,
   Job,
   JobRequirement,
@@ -50,12 +49,12 @@ export function JobDetailClient({ jobId }: { jobId: number }) {
   const router = useRouter();
   const [job, setJob] = useState<Job | null>(null);
   const [requirements, setRequirements] = useState<JobRequirement[]>([]);
-  const [candidateRows, setCandidateRows] = useState<CandidateRow[]>([]);
+  const [candidateRows, setCandidateRows] = useState<CandidateComparisonItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusSaving, setStatusSaving] = useState(false);
   const [initiatingCandidateId, setInitiatingCandidateId] = useState<number | null>(null);
-  const [progressCandidate, setProgressCandidate] = useState<Candidate | null>(null);
+  const [progressCandidate, setProgressCandidate] = useState<CandidateComparisonItem | null>(null);
   const [progress, setProgress] = useState<ProgressState | null>(null);
   const [progressOpen, setProgressOpen] = useState(false);
   const [backgroundNotice, setBackgroundNotice] = useState<string | null>(null);
@@ -66,23 +65,8 @@ export function JobDetailClient({ jobId }: { jobId: number }) {
   }, [jobId]);
 
   const loadCandidates = useCallback(async () => {
-    const candidates = await getCandidates(jobId);
-    const rows = await Promise.all(
-      candidates.map(async (candidate): Promise<CandidateRow> => {
-        const [resume, history] = await Promise.all([
-          getCandidateResume(candidate.id).catch(() => null),
-          candidate.status === "processing"
-            ? getScreeningHistory(candidate.id).catch(() => [])
-            : Promise.resolve([]),
-        ]);
-        return {
-          candidate,
-          resume,
-          activeRun: history.find((run) => run.status === "processing") ?? null,
-        };
-      }),
-    );
-    setCandidateRows(rows);
+    const comparison = await getCandidateComparison(jobId);
+    setCandidateRows(comparison.candidates);
   }, [jobId]);
 
   const loadPage = useCallback(async () => {
@@ -107,7 +91,7 @@ export function JobDetailClient({ jobId }: { jobId: number }) {
   }, [loadPage]);
 
   const hasProcessingCandidate = candidateRows.some(
-    ({ candidate }) => candidate.status === "processing",
+    (candidate) => candidate.status === "processing",
   );
 
   useEffect(() => {
@@ -122,7 +106,7 @@ export function JobDetailClient({ jobId }: { jobId: number }) {
     if (!progressCandidate || !progress?.runId || progress.status !== "processing") {
       return;
     }
-    const candidateId = progressCandidate.id;
+    const candidateId = progressCandidate.candidate_id;
     const candidateName = candidateDisplayName(
       progressCandidate.name,
       progressCandidate.original_filename,
@@ -175,15 +159,15 @@ export function JobDetailClient({ jobId }: { jobId: number }) {
     }
   }
 
-  async function handleScreen(candidate: Candidate) {
+  async function handleScreen(candidate: CandidateComparisonItem) {
     setProgressCandidate(candidate);
     setProgress({ runId: null, status: "processing", currentStage: "queued" });
     setProgressOpen(true);
     setBackgroundNotice(null);
-    setInitiatingCandidateId(candidate.id);
-    setScreeningErrors((current) => ({ ...current, [candidate.id]: "" }));
+    setInitiatingCandidateId(candidate.candidate_id);
+    setScreeningErrors((current) => ({ ...current, [candidate.candidate_id]: "" }));
     try {
-      const started = await screenCandidate(candidate.id);
+      const started = await screenCandidate(candidate.candidate_id);
       setProgress({
         runId: started.screening_run_id,
         status: started.status,
@@ -191,10 +175,15 @@ export function JobDetailClient({ jobId }: { jobId: number }) {
       });
       setCandidateRows((current) =>
         current.map((row) =>
-          row.candidate.id === candidate.id
+          row.candidate_id === candidate.candidate_id
             ? {
                 ...row,
-                candidate: { ...row.candidate, status: "processing" },
+                status: "processing",
+                review_priority: null,
+                review_label: null,
+                comparable_evidence: false,
+                active_screening_run_id: started.screening_run_id,
+                active_screening_stage: started.current_stage,
               }
             : row,
         ),
@@ -204,7 +193,7 @@ export function JobDetailClient({ jobId }: { jobId: number }) {
       setProgress(null);
       setScreeningErrors((current) => ({
         ...current,
-        [candidate.id]: getErrorMessage(
+        [candidate.candidate_id]: getErrorMessage(
           screenError,
           "The screening run could not be started. Try again.",
         ),
@@ -215,29 +204,36 @@ export function JobDetailClient({ jobId }: { jobId: number }) {
     }
   }
 
-  async function handleViewProgress(candidate: Candidate, run: ScreeningRun | null) {
+  async function handleViewProgress(candidate: CandidateComparisonItem) {
     setProgressCandidate(candidate);
     setBackgroundNotice(null);
-    if (run) {
-      setProgress({ runId: run.id, status: run.status, currentStage: run.current_stage });
+    if (candidate.active_screening_run_id && candidate.active_screening_stage) {
+      setProgress({
+        runId: candidate.active_screening_run_id,
+        status: "processing",
+        currentStage: candidate.active_screening_stage,
+      });
       setProgressOpen(true);
       return;
     }
     try {
-      const history = await getScreeningHistory(candidate.id);
-      const active = history.find((item) => item.status === "processing") ?? history[0];
-      if (active) {
+      const comparison = await getCandidateComparison(jobId);
+      const active = comparison.candidates.find(
+        (item) => item.candidate_id === candidate.candidate_id,
+      );
+      setCandidateRows(comparison.candidates);
+      if (active?.active_screening_run_id && active.active_screening_stage) {
         setProgress({
-          runId: active.id,
-          status: active.status,
-          currentStage: active.current_stage,
+          runId: active.active_screening_run_id,
+          status: "processing",
+          currentStage: active.active_screening_stage,
         });
         setProgressOpen(true);
       }
     } catch {
       setScreeningErrors((current) => ({
         ...current,
-        [candidate.id]: "Unable to load screening progress. Try again.",
+        [candidate.candidate_id]: "Unable to load screening progress. Try again.",
       }));
     }
   }
@@ -274,11 +270,9 @@ export function JobDetailClient({ jobId }: { jobId: number }) {
           status={progress.status}
           currentStage={progress.currentStage}
           onClose={closeProgress}
-          onViewReport={
-            progressCandidate
-              ? () => router.push(`/candidates/${progressCandidate.id}`)
-              : undefined
-          }
+          onViewReport={progressCandidate
+            ? () => router.push(`/candidates/${progressCandidate.candidate_id}`)
+            : undefined}
           onRetry={
             progressCandidate ? () => void handleScreen(progressCandidate) : undefined
           }
@@ -338,6 +332,8 @@ export function JobDetailClient({ jobId }: { jobId: number }) {
 
       <CandidateUpload jobId={job.id} onComplete={loadCandidates} />
 
+      <RecommendedForReview candidates={candidateRows} />
+
       <section className="panel candidate-section" aria-labelledby="candidate-list-title">
         <div className="panel-heading">
           <div>
@@ -352,7 +348,7 @@ export function JobDetailClient({ jobId }: { jobId: number }) {
           screeningCandidateId={initiatingCandidateId}
           screeningErrors={screeningErrors}
           onScreen={(candidate) => void handleScreen(candidate)}
-          onViewProgress={(candidate, run) => void handleViewProgress(candidate, run)}
+          onViewProgress={(candidate) => void handleViewProgress(candidate)}
         />
       </section>
     </div>

@@ -15,6 +15,10 @@ export type ScreeningStage =
   | "failed";
 export type EvidenceStatus = "supported" | "partial" | "no_evidence";
 export type EvidenceConfidence = "high" | "medium" | "low";
+export type ReviewLabel =
+  | "strong_evidence"
+  | "moderate_evidence"
+  | "needs_verification";
 
 export interface Job {
   id: number;
@@ -135,6 +139,37 @@ export interface ScreeningStart {
 export interface Coverage {
   supported: number;
   total: number;
+}
+
+export interface CoverageCounts extends Coverage {
+  partial: number;
+  no_evidence: number;
+}
+
+export interface CandidateComparisonItem {
+  candidate_id: number;
+  name: string | null;
+  email: string | null;
+  original_filename: string | null;
+  status: CandidateStatus;
+  created_at: string;
+  resume_extraction_status: ResumeExtractionStatus | null;
+  latest_completed_run_id: number | null;
+  latest_completed_at: string | null;
+  active_screening_run_id: number | null;
+  active_screening_stage: ScreeningStage | null;
+  active_screening_stage_updated_at: string | null;
+  required: CoverageCounts | null;
+  preferred: CoverageCounts | null;
+  needs_verification_count: number | null;
+  review_priority: number | null;
+  review_label: ReviewLabel | null;
+  comparable_evidence: boolean;
+}
+
+export interface CandidateComparison {
+  job_id: number;
+  candidates: CandidateComparisonItem[];
 }
 
 export interface EvidenceItem {

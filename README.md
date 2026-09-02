@@ -1,6 +1,6 @@
 # Evidence-Grounded Recruitment Agent
 
-Phase 7.5 provides the lightweight application, secure document ingestion, evidence-grounded recruitment graph, persistent candidate reports, and recruiter-facing workflow described in the PRD:
+The current MVP provides the lightweight application, secure document ingestion, evidence-grounded recruitment graph, persistent candidate reports, and recruiter-facing workflow described in the PRD:
 
 - Responsive Next.js and TypeScript recruiter workspace
 - FastAPI backend with `GET /health`
@@ -18,6 +18,7 @@ Phase 7.5 provides the lightweight application, secure document ingestion, evide
 - Deterministic evidence-quote verification, uncertainty grouping, and coverage
 - Normalized candidate profiles, evidence, citations, and interview questions
 - Latest-report, run-history, and specific-run APIs
+- Deterministic vacancy-level candidate comparison from normalized evidence rows
 - Dashboard, job setup, requirement management, PDF upload, and candidate workflow
 - Evidence-first candidate reports with coverage, citations, verification flags, interview questions, profile context, and screening history
 - Dockerfiles and Docker Compose orchestration
@@ -112,6 +113,34 @@ The principal routes are:
 - `/candidates/{candidateId}/screenings/{runId}` — immutable historical report
 
 The report clearly separates required and preferred coverage and shows text labels for `supported`, `partial`, and `no evidence`. Evidence quotations retain their source and page when available, uncertain items are collected under “Needs verification,” and generated interview questions can be copied but are never sent automatically. Candidate profile data is secondary context rather than proof of a requirement.
+
+## Vacancy candidate prioritization
+
+The vacancy page includes **Recommended for Review** and a comparison-aware candidate table. This is a review-order aid, not an AI hiring recommendation. It displays raw required/preferred coverage and unresolved-item counts and links to the existing evidence report for detail. Processing, uploaded, and failed candidates remain visible but do not receive a review priority.
+
+`GET /api/v1/jobs/{job_id}/candidate-comparison` derives summaries from each candidate's latest completed screening. Failed and processing runs never replace that immutable completed summary. Eligibility for priority additionally requires the candidate's current status to be `completed`; therefore a re-screening in progress or a failed latest attempt remains explicitly unranked until a new run completes.
+
+Completed candidates use this exact lexicographic order:
+
+```text
+required supported DESC
+required no_evidence ASC
+required partial DESC
+preferred supported DESC
+needs_human_verification count ASC
+latest completed timestamp DESC
+candidate id ASC
+```
+
+Candidates with identical first five evidence fields are marked **Comparable evidence coverage**. Completion time and candidate ID are stable tie-breakers only; they do not imply an evidence difference.
+
+Review labels are deterministic and use no model call:
+
+- **Strong Evidence Coverage** — every required criterion is supported.
+- **Moderate Evidence Coverage** — at least one required criterion is supported/partial, or a vacancy with no required criteria has preferred support.
+- **Needs Verification** — no required criterion has supporting or partial evidence.
+
+The endpoint uses a window subquery to select one completed run per candidate and one grouped aggregation over normalized `evidence_results`. It returns no resume text, evidence quotes, full reports, or score. Query count is constant as the candidate count grows; no schema migration or persisted score/rank column is needed.
 
 ## Manual vacancy criteria draft
 
@@ -255,6 +284,7 @@ All resource endpoints use the `/api/v1` prefix.
 | `POST` | `/api/v1/jobs/import` | Extract a temporary job document and return an editable AI draft without persistence |
 | `GET` | `/api/v1/jobs` | List the user's jobs |
 | `GET` | `/api/v1/jobs/{job_id}` | Get a job |
+| `GET` | `/api/v1/jobs/{job_id}/candidate-comparison` | List latest completed coverage summaries in deterministic review order |
 | `PATCH` | `/api/v1/jobs/{job_id}` | Update a job |
 | `DELETE` | `/api/v1/jobs/{job_id}` | Delete a job and its child records |
 | `POST` | `/api/v1/jobs/{job_id}/requirements` | Create a requirement |
@@ -348,7 +378,7 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-Frontend interaction tests cover manual AI pre-population, recruiter edits, deletion, type changes, additions, confirmation, graceful AI fallback, upload, persisted screening progress, dismissal, completion/failure actions, and processing-row recovery:
+Frontend interaction tests cover manual AI pre-population, recruiter edits, deletion, type changes, additions, confirmation, graceful AI fallback, upload, persisted screening progress, dismissal, completion/failure actions, processing-row recovery, comparison summaries, stable sorting, and Recommended for Review cards:
 
 ```bash
 cd frontend
