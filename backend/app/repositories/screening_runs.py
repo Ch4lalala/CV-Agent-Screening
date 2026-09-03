@@ -78,6 +78,7 @@ def get_completed(
                 EvidenceResult.evidence_items
             ),
             selectinload(ScreeningRun.interview_questions),
+            selectinload(ScreeningRun.security_flags),
         )
         .execution_options(populate_existing=True)
     )

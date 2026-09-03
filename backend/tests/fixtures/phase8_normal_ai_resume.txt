@@ -1,0 +1,7 @@
+Normal AI Resume Demo
+
+Experience
+- Built an LLM prompt evaluation system.
+- Worked on AI instruction-following benchmarks.
+- Implemented system prompts for a chatbot.
+- Developed APIs using Python and PostgreSQL.

@@ -16,13 +16,19 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base
-from app.models.enums import ScreeningRunStatus, ScreeningStage, enum_values
+from app.models.enums import (
+    ScreeningRunStatus,
+    ScreeningStage,
+    SecurityStatus,
+    enum_values,
+)
 
 if TYPE_CHECKING:
     from app.models.candidate import Candidate
     from app.models.candidate_profile import CandidateProfile
     from app.models.evidence_result import EvidenceResult
     from app.models.interview_question import InterviewQuestion
+    from app.models.security_flag import SecurityFlag
 
 
 JSONValue = JSON().with_variant(JSONB(), "postgresql")
@@ -80,6 +86,18 @@ class ScreeningRun(Base):
         DateTime(timezone=True), nullable=True
     )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    security_status: Mapped[SecurityStatus] = mapped_column(
+        SqlEnum(
+            SecurityStatus,
+            name="security_status",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=enum_values,
+        ),
+        default=SecurityStatus.UNAVAILABLE,
+        server_default=SecurityStatus.UNAVAILABLE.value,
+    )
+    sanitized_resume_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -98,6 +116,11 @@ class ScreeningRun(Base):
         passive_deletes=True,
     )
     interview_questions: Mapped[list["InterviewQuestion"]] = relationship(
+        back_populates="screening_run",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    security_flags: Mapped[list["SecurityFlag"]] = relationship(
         back_populates="screening_run",
         cascade="all, delete-orphan",
         passive_deletes=True,

@@ -6,6 +6,7 @@ export type ScreeningRunStatus = "pending" | "processing" | "completed" | "faile
 export type ScreeningStage =
   | "queued"
   | "normalize_requirements"
+  | "resume_security"
   | "extract_candidate_profile"
   | "match_evidence"
   | "analyze_uncertainty"
@@ -15,6 +16,14 @@ export type ScreeningStage =
   | "failed";
 export type EvidenceStatus = "supported" | "partial" | "no_evidence";
 export type EvidenceConfidence = "high" | "medium" | "low";
+export type SecurityStatus = "clean" | "warning" | "unavailable";
+export type SecurityFlagType =
+  | "prompt_injection"
+  | "instruction_manipulation"
+  | "ranking_manipulation"
+  | "evaluation_override"
+  | "suspicious_hidden_instruction";
+export type SecuritySeverity = "low" | "medium" | "high";
 export type ReviewLabel =
   | "strong_evidence"
   | "moderate_evidence"
@@ -126,6 +135,7 @@ export interface ScreeningRun {
   started_at: string | null;
   finished_at: string | null;
   error_message: string | null;
+  security_status: SecurityStatus;
   created_at: string;
 }
 
@@ -156,6 +166,7 @@ export interface CandidateComparisonItem {
   resume_extraction_status: ResumeExtractionStatus | null;
   latest_completed_run_id: number | null;
   latest_completed_at: string | null;
+  security_status: SecurityStatus | null;
   active_screening_run_id: number | null;
   active_screening_stage: ScreeningStage | null;
   active_screening_stage_updated_at: string | null;
@@ -198,6 +209,23 @@ export interface InterviewQuestion {
   requirement_name: string | null;
   question: string;
   created_at: string;
+}
+
+export interface SecurityFlag {
+  id: number;
+  flag_type: SecurityFlagType;
+  severity: SecuritySeverity;
+  detected_text: string;
+  explanation: string;
+  excluded_from_evaluation: boolean;
+  source_page: number | null;
+  created_at: string;
+}
+
+export interface SecurityAnalysis {
+  status: SecurityStatus;
+  flag_count: number;
+  flags: SecurityFlag[];
 }
 
 export interface CandidateExperience {
@@ -258,7 +286,7 @@ export interface CandidateReport {
   evidence_results: EvidenceResult[];
   needs_verification: string[];
   interview_questions: InterviewQuestion[];
-  security_warning: null;
+  security: SecurityAnalysis;
 }
 
 export type ScreeningProgressResponse = ScreeningRun | CandidateReport;

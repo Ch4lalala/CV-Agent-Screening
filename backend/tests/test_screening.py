@@ -6,7 +6,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.agents.graph import get_recruitment_graph
-from app.agents.schemas import CandidateProfile, CoverageSummary, ScreeningReport
+from app.agents.schemas import (
+    CandidateProfile,
+    CoverageSummary,
+    SecurityAnalysis,
+    ScreeningReport,
+)
 from app.ai.client import get_ai_client, get_chat_model
 from app.ai.config import get_ai_settings
 from app.ai.exceptions import AIProviderError
@@ -34,12 +39,21 @@ class FakeGraph:
             raise self.result
         for node in (
             "normalize_requirements",
+            "resume_security",
             "extract_candidate_profile",
             "match_evidence",
             "analyze_uncertainty",
             "generate_interview_questions",
         ):
-            yield {node: {}}
+            update = (
+                {
+                    "security": SecurityAnalysis(status="clean", flags=[]),
+                    "sanitized_resume_text": "Skills: Go",
+                }
+                if node == "resume_security"
+                else {}
+            )
+            yield {node: update}
         yield {"generate_report": self.result}
 
 
@@ -105,6 +119,7 @@ def empty_report(candidate: Candidate) -> ScreeningReport:
         evidence_results=[],
         needs_verification=[],
         interview_questions=[],
+        security=SecurityAnalysis(status="clean", flags=[]),
         security_warning=None,
     )
 

@@ -67,6 +67,9 @@ export function RecommendedForReview({
               {candidate.comparable_evidence ? (
                 <p className="comparable-evidence-note">Comparable evidence coverage</p>
               ) : null}
+              {candidate.security_status === "warning" ? (
+                <p className="security-summary-warning">Security warning</p>
+              ) : null}
               <dl className="recommended-review-metrics">
                 <div>
                   <dt>Required criteria</dt>

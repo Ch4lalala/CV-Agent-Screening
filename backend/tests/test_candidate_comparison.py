@@ -15,6 +15,7 @@ from app.models.enums import (
     ResumeExtractionStatus,
     ScreeningRunStatus,
     ScreeningStage,
+    SecurityStatus,
 )
 
 
@@ -66,6 +67,7 @@ def add_completed_run(
     preferred: tuple[int, int, int] = (0, 0, 0),
     verification_count: int = 0,
     finished_offset: int = 0,
+    security_status: SecurityStatus = SecurityStatus.UNAVAILABLE,
 ) -> ScreeningRun:
     finished_at = NOW + timedelta(minutes=finished_offset)
     run = ScreeningRun(
@@ -77,6 +79,7 @@ def add_completed_run(
         model_name="deterministic-test-model",
         report_json={"immutable": True, "offset": finished_offset},
         created_at=finished_at,
+        security_status=security_status,
     )
     db.add(run)
     db.flush()
@@ -207,6 +210,38 @@ def test_review_labels_are_derived_only_from_visible_required_coverage(
     assert by_name["Strong"]["review_label"] == "strong_evidence"
     assert by_name["Moderate"]["review_label"] == "moderate_evidence"
     assert by_name["Verify"]["review_label"] == "needs_verification"
+
+
+def test_security_warning_is_visible_but_does_not_change_review_priority(
+    client: TestClient,
+    db_session: Session,
+    development_user: User,
+) -> None:
+    job = make_job(db_session, development_user)
+    stronger = make_candidate(db_session, job, "Warning stronger")
+    weaker = make_candidate(db_session, job, "Clean weaker")
+    add_completed_run(
+        db_session,
+        stronger,
+        required=(3, 0, 0),
+        security_status=SecurityStatus.WARNING,
+    )
+    add_completed_run(
+        db_session,
+        weaker,
+        required=(2, 0, 1),
+        security_status=SecurityStatus.CLEAN,
+    )
+    db_session.commit()
+
+    result = comparison(client, job.id)
+
+    assert [item["name"] for item in result["candidates"]] == [
+        "Warning stronger",
+        "Clean weaker",
+    ]
+    assert result["candidates"][0]["review_priority"] == 1
+    assert result["candidates"][0]["security_status"] == "warning"
 
 
 def test_unranked_states_remain_visible_and_preserve_previous_completed_summary(

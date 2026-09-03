@@ -2,12 +2,21 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 RequirementType = Literal["required", "preferred"]
 RequirementSource = Literal["recruiter", "ai_derived"]
 EvidenceStatus = Literal["supported", "partial", "no_evidence"]
 Confidence = Literal["high", "medium", "low"]
+SecurityStatus = Literal["clean", "warning", "unavailable"]
+SecurityFlagType = Literal[
+    "prompt_injection",
+    "instruction_manipulation",
+    "ranking_manipulation",
+    "evaluation_override",
+    "suspicious_hidden_instruction",
+]
+SecuritySeverity = Literal["low", "medium", "high"]
 
 
 class AgentModel(BaseModel):
@@ -71,6 +80,49 @@ class CandidateProfile(AgentModel):
     certifications: list[str] = Field(default_factory=list, max_length=50)
     github_urls: list[str] = Field(default_factory=list, max_length=20)
     portfolio_urls: list[str] = Field(default_factory=list, max_length=20)
+
+
+class SecurityFlag(AgentModel):
+    type: SecurityFlagType
+    severity: SecuritySeverity
+    detected_text: str = Field(min_length=1, max_length=2000)
+    explanation: str = Field(min_length=1, max_length=2000)
+    source_page: int | None = Field(default=None, ge=1)
+    excluded_from_evaluation: bool
+
+
+class SecurityAnalysis(AgentModel):
+    status: SecurityStatus
+    flags: list[SecurityFlag] = Field(default_factory=list, max_length=50)
+
+
+class SecurityClassificationDecision(AgentModel):
+    fragment_index: int = Field(ge=0)
+    suspicious: bool
+    detected_text: str | None = Field(default=None, max_length=2000)
+    type: SecurityFlagType | None = None
+    severity: SecuritySeverity | None = None
+    explanation: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def require_flag_fields_when_suspicious(self):
+        if self.suspicious and (
+            not self.detected_text
+            or self.type is None
+            or self.severity is None
+            or not self.explanation
+        ):
+            raise ValueError(
+                "Suspicious classifications require exact text, type, severity, and explanation"
+            )
+        return self
+
+
+class SecurityClassificationResponse(AgentModel):
+    decisions: list[SecurityClassificationDecision] = Field(
+        default_factory=list,
+        max_length=25,
+    )
 
 
 class EvidenceItem(AgentModel):
@@ -141,4 +193,8 @@ class ScreeningReport(AgentModel):
     evidence_results: list[EvidenceAssessment]
     needs_verification: list[str]
     interview_questions: list[InterviewQuestion]
+    security: SecurityAnalysis = Field(
+        default_factory=lambda: SecurityAnalysis(status="unavailable", flags=[])
+    )
+    # Retained only so pre-Phase-8 immutable report_json snapshots remain readable.
     security_warning: None = None

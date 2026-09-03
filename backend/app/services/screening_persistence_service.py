@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.agents.schemas import CandidateProfile as CandidateProfileSchema
-from app.agents.schemas import ScreeningReport
+from app.agents.schemas import SecurityAnalysis, ScreeningReport
 from app.models.candidate_profile import CandidateProfile as CandidateProfileRecord
 from app.models.enums import (
     CandidateStatus,
@@ -15,11 +15,15 @@ from app.models.enums import (
     RequirementType,
     ScreeningRunStatus,
     ScreeningStage,
+    SecurityFlagType,
+    SecuritySeverity,
+    SecurityStatus,
 )
 from app.models.evidence_item import EvidenceItem
 from app.models.evidence_result import EvidenceResult
 from app.models.interview_question import InterviewQuestion
 from app.models.screening_run import ScreeningRun
+from app.models.security_flag import SecurityFlag as SecurityFlagRecord
 from app.repositories import screening_runs
 from app.schemas.screening import (
     CandidateReportCandidateResponse,
@@ -29,11 +33,57 @@ from app.schemas.screening import (
     InterviewQuestionResponse,
     ScreeningCoverageResponse,
     ScreeningRunResponse,
+    SecurityAnalysisResponse,
+    SecurityFlagResponse,
 )
 
 
 class ScreeningPersistenceError(Exception):
     pass
+
+
+def _apply_security_scan(
+    run: ScreeningRun,
+    security: SecurityAnalysis,
+    sanitized_resume_text: str | None,
+) -> None:
+    run.security_status = SecurityStatus(security.status)
+    run.sanitized_resume_text = sanitized_resume_text
+    run.security_flags.extend(
+        SecurityFlagRecord(
+            flag_type=SecurityFlagType(flag.type),
+            severity=SecuritySeverity(flag.severity),
+            detected_text=flag.detected_text,
+            explanation=flag.explanation,
+            excluded_from_evaluation=flag.excluded_from_evaluation,
+            source_page=flag.source_page,
+        )
+        for flag in security.flags
+    )
+
+
+def persist_security_scan(
+    db: Session,
+    *,
+    run: ScreeningRun,
+    security: SecurityAnalysis,
+    sanitized_resume_text: str,
+) -> None:
+    """Persist the real security result as soon as its graph node completes."""
+
+    try:
+        if run.status != ScreeningRunStatus.PROCESSING:
+            raise ScreeningPersistenceError("Screening run is not writable")
+        if run.sanitized_resume_text is not None or run.security_flags:
+            raise ScreeningPersistenceError("Security scan is already persisted")
+        _apply_security_scan(run, security, sanitized_resume_text)
+        db.commit()
+    except ScreeningPersistenceError:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        raise ScreeningPersistenceError("Unable to persist security scan") from exc
 
 
 def persist_completed_report(
@@ -48,6 +98,11 @@ def persist_completed_report(
     try:
         if run.status != ScreeningRunStatus.PROCESSING or run.report_json is not None:
             raise ScreeningPersistenceError("Screening run is not writable")
+
+        # Test doubles and older graph adapters may return only the final report.
+        # The production stream persists this immediately at the security node.
+        if run.sanitized_resume_text is None:
+            _apply_security_scan(run, report.security, None)
 
         db.add(
             CandidateProfileRecord(
@@ -174,6 +229,10 @@ def build_candidate_report(run: ScreeningRun) -> CandidateReportResponse:
         InterviewQuestionResponse.model_validate(item)
         for item in sorted(run.interview_questions, key=lambda value: value.id)
     ]
+    security_flags = [
+        SecurityFlagResponse.model_validate(item)
+        for item in sorted(run.security_flags, key=lambda value: value.id)
+    ]
 
     return CandidateReportResponse(
         screening_run=ScreeningRunResponse.model_validate(run),
@@ -188,5 +247,9 @@ def build_candidate_report(run: ScreeningRun) -> CandidateReportResponse:
         evidence_results=evidence_results,
         needs_verification=snapshot.needs_verification,
         interview_questions=questions,
-        security_warning=None,
+        security=SecurityAnalysisResponse(
+            status=run.security_status,
+            flag_count=len(security_flags),
+            flags=security_flags,
+        ),
     )

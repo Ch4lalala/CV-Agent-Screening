@@ -11,6 +11,7 @@ import { CoverageSummary } from "@/components/screening/coverage-summary";
 import { EvidenceMatrix } from "@/components/screening/evidence-matrix";
 import { InterviewQuestions } from "@/components/screening/interview-questions";
 import { NeedsVerification } from "@/components/screening/needs-verification";
+import { ResumeSecurity } from "@/components/screening/resume-security";
 import { ScreeningHistory } from "@/components/screening/screening-history";
 import { Alert } from "@/components/ui/alert";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -384,6 +385,7 @@ export function CandidateReportClient({
         />
       ) : (
         <>
+          <ResumeSecurity security={report.security} />
           <CoverageSummary
             required={report.coverage.required}
             preferred={report.coverage.preferred}

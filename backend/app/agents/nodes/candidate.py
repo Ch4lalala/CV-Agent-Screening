@@ -14,11 +14,11 @@ async def extract_candidate_profile(
 ) -> dict[str, object]:
     profile = await ai_client.invoke_structured(
         CandidateProfile,
-        candidate_profile_messages(state["resume_text"]),
+        candidate_profile_messages(state["sanitized_resume_text"]),
     )
     return {
         "candidate_profile": retain_candidate_provided_urls(
             profile,
-            state["resume_text"],
+            state["sanitized_resume_text"],
         )
     }

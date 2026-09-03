@@ -2,6 +2,7 @@ import type { ScreeningRunStatus, ScreeningStage } from "@/types/api";
 
 const workflow: Array<{ stage: ScreeningStage; label: string }> = [
   { stage: "normalize_requirements", label: "Understanding job requirements" },
+  { stage: "resume_security", label: "Checking resume security" },
   { stage: "extract_candidate_profile", label: "Extracting candidate profile" },
   { stage: "match_evidence", label: "Matching resume evidence" },
   { stage: "analyze_uncertainty", label: "Checking uncertainty" },

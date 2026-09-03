@@ -3,7 +3,12 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from app.models.enums import CandidateStatus, ResumeExtractionStatus, ScreeningStage
+from app.models.enums import (
+    CandidateStatus,
+    ResumeExtractionStatus,
+    ScreeningStage,
+    SecurityStatus,
+)
 
 
 ReviewLabel = Literal[
@@ -30,6 +35,7 @@ class CandidateComparisonItemResponse(BaseModel):
     resume_extraction_status: ResumeExtractionStatus | None
     latest_completed_run_id: int | None
     latest_completed_at: datetime | None
+    security_status: SecurityStatus | None
     active_screening_run_id: int | None
     active_screening_stage: ScreeningStage | None
     active_screening_stage_updated_at: datetime | None

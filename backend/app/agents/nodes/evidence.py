@@ -21,13 +21,13 @@ async def match_evidence(
         evidence_messages(
             requirements=requirements,
             candidate_profile=state["candidate_profile"],
-            resume_text=state["resume_text"],
+            resume_text=state["sanitized_resume_text"],
         ),
     )
     return {
         "evidence_results": validate_evidence_assessments(
             requirements,
             response,
-            state["resume_text"],
+            state["sanitized_resume_text"],
         )
     }

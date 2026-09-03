@@ -35,6 +35,7 @@ class ScreeningRunStatus(str, Enum):
 class ScreeningStage(str, Enum):
     QUEUED = "queued"
     NORMALIZE_REQUIREMENTS = "normalize_requirements"
+    RESUME_SECURITY = "resume_security"
     EXTRACT_CANDIDATE_PROFILE = "extract_candidate_profile"
     MATCH_EVIDENCE = "match_evidence"
     ANALYZE_UNCERTAINTY = "analyze_uncertainty"
@@ -54,6 +55,26 @@ class EvidenceConfidence(str, Enum):
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"
+
+
+class SecurityStatus(str, Enum):
+    CLEAN = "clean"
+    WARNING = "warning"
+    UNAVAILABLE = "unavailable"
+
+
+class SecurityFlagType(str, Enum):
+    PROMPT_INJECTION = "prompt_injection"
+    INSTRUCTION_MANIPULATION = "instruction_manipulation"
+    RANKING_MANIPULATION = "ranking_manipulation"
+    EVALUATION_OVERRIDE = "evaluation_override"
+    SUSPICIOUS_HIDDEN_INSTRUCTION = "suspicious_hidden_instruction"
+
+
+class SecuritySeverity(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
 
 
 def enum_values(enum_class: type[Enum]) -> list[str]:

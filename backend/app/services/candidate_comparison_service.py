@@ -93,6 +93,7 @@ def get_candidate_comparison(
                 resume_extraction_status=row["resume_extraction_status"],
                 latest_completed_run_id=row["latest_completed_run_id"],
                 latest_completed_at=row["latest_completed_at"],
+                security_status=row["security_status"],
                 active_screening_run_id=row["active_screening_run_id"],
                 active_screening_stage=row["active_screening_stage"],
                 active_screening_stage_updated_at=(

@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents.graph import get_recruitment_graph
-from app.agents.schemas import RecruiterRequirement, ScreeningReport
+from app.agents.schemas import RecruiterRequirement, SecurityAnalysis, ScreeningReport
 from app.agents.state import RecruitmentState
 from app.ai.config import get_configured_ai_model_name
 from app.ai.exceptions import (
@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 
 _NODE_STAGES = (
     ScreeningStage.NORMALIZE_REQUIREMENTS,
+    ScreeningStage.RESUME_SECURITY,
     ScreeningStage.EXTRACT_CANDIDATE_PROFILE,
     ScreeningStage.MATCH_EVIDENCE,
     ScreeningStage.ANALYZE_UNCERTAINTY,
@@ -85,6 +86,13 @@ class ScreeningExecutionContext:
     candidate_id: int
     initial_state: RecruitmentState
     valid_requirement_ids: set[int]
+
+
+@dataclass(frozen=True)
+class GraphExecutionResult:
+    report_payload: object
+    security: SecurityAnalysis
+    sanitized_resume_text: str | None
 
 
 def _safe_failure_message(exc: BaseException) -> str:
@@ -229,18 +237,35 @@ async def _stream_graph(
     *,
     initial_state: RecruitmentState,
     on_node_completed: Callable[[str], Awaitable[None]],
-) -> object:
+    on_security_completed: Callable[[SecurityAnalysis, str], Awaitable[None]],
+) -> GraphExecutionResult:
     """Return the final report payload while reporting real completed nodes."""
 
     stream = getattr(graph, "astream", None)
     if callable(stream):
         final_report: object | None = None
+        security = SecurityAnalysis(status="unavailable", flags=[])
+        sanitized_resume_text: str | None = None
         async for update in stream(initial_state, stream_mode="updates"):
             if not isinstance(update, dict):
                 continue
             for node_name, node_update in update.items():
                 if node_name not in {stage.value for stage in _NODE_STAGES}:
                     continue
+                if (
+                    node_name == ScreeningStage.RESUME_SECURITY.value
+                    and isinstance(node_update, dict)
+                ):
+                    security = SecurityAnalysis.model_validate(
+                        node_update.get("security")
+                    )
+                    sanitized_value = node_update.get("sanitized_resume_text")
+                    if not isinstance(sanitized_value, str):
+                        raise ScreeningExecutionError(
+                            "Security node did not produce sanitized resume text"
+                        )
+                    sanitized_resume_text = sanitized_value
+                    await on_security_completed(security, sanitized_resume_text)
                 if (
                     node_name == ScreeningStage.GENERATE_REPORT.value
                     and isinstance(node_update, dict)
@@ -249,7 +274,11 @@ async def _stream_graph(
                 await on_node_completed(node_name)
         if final_report is None:
             raise ScreeningExecutionError("Screening graph did not produce a report")
-        return final_report
+        return GraphExecutionResult(
+            report_payload=final_report,
+            security=security,
+            sanitized_resume_text=sanitized_resume_text,
+        )
 
     invoke = getattr(graph, "ainvoke", None)
     if not callable(invoke):
@@ -257,7 +286,20 @@ async def _stream_graph(
     result = await invoke(initial_state)
     if not isinstance(result, dict) or "final_report" not in result:
         raise ScreeningExecutionError("Screening graph did not produce a report")
-    return result["final_report"]
+    security = SecurityAnalysis.model_validate(
+        result.get("security", {"status": "unavailable", "flags": []})
+    )
+    sanitized_value = result.get("sanitized_resume_text")
+    sanitized_resume_text = (
+        sanitized_value if isinstance(sanitized_value, str) else None
+    )
+    if sanitized_resume_text is not None:
+        await on_security_completed(security, sanitized_resume_text)
+    return GraphExecutionResult(
+        report_payload=result["final_report"],
+        security=security,
+        sanitized_resume_text=sanitized_resume_text,
+    )
 
 
 async def execute_screening(
@@ -279,14 +321,29 @@ async def execute_screening(
         if next_stage is not None:
             _persist_stage(db, run_id=context.run_id, stage=next_stage)
 
+    async def security_completed(
+        security: SecurityAnalysis,
+        sanitized_resume_text: str,
+    ) -> None:
+        run = db.get(ScreeningRun, context.run_id)
+        if run is None:
+            raise ScreeningExecutionError("Screening run was not found")
+        screening_persistence_service.persist_security_scan(
+            db,
+            run=run,
+            security=security,
+            sanitized_resume_text=sanitized_resume_text,
+        )
+
     try:
         screening_graph = graph or get_recruitment_graph()
-        report_payload = await _stream_graph(
+        graph_result = await _stream_graph(
             screening_graph,
             initial_state=context.initial_state,
             on_node_completed=node_completed,
+            on_security_completed=security_completed,
         )
-        report = ScreeningReport.model_validate(report_payload)
+        report = ScreeningReport.model_validate(graph_result.report_payload)
         run = db.get(ScreeningRun, context.run_id)
         if run is None:
             raise ScreeningExecutionError("Screening run was not found")

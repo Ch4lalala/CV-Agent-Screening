@@ -135,6 +135,9 @@ export function CandidateTable({
                         {candidate.comparable_evidence ? (
                           <small>Comparable evidence coverage</small>
                         ) : null}
+                        {candidate.security_status === "warning" ? (
+                          <small className="security-summary-warning">Security warning</small>
+                        ) : null}
                       </span>
                     </div>
                     {screeningErrors[candidate.candidate_id] ? (

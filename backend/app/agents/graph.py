@@ -9,6 +9,7 @@ from app.agents.nodes.evidence import match_evidence
 from app.agents.nodes.interview import generate_interview_questions
 from app.agents.nodes.report import generate_report
 from app.agents.nodes.requirements import normalize_requirements
+from app.agents.nodes.security import check_resume_security
 from app.agents.nodes.uncertainty import analyze_uncertainty
 from app.agents.state import RecruitmentState
 from app.ai.client import AIClient, get_ai_client
@@ -22,6 +23,10 @@ def build_recruitment_graph(ai_client: AIClient | None = None):
     workflow.add_node(
         "normalize_requirements",
         partial(normalize_requirements, ai_client=client),
+    )
+    workflow.add_node(
+        "resume_security",
+        partial(check_resume_security, ai_client=client),
     )
     workflow.add_node(
         "extract_candidate_profile",
@@ -39,7 +44,8 @@ def build_recruitment_graph(ai_client: AIClient | None = None):
     workflow.add_node("generate_report", generate_report)
 
     workflow.add_edge(START, "normalize_requirements")
-    workflow.add_edge("normalize_requirements", "extract_candidate_profile")
+    workflow.add_edge("normalize_requirements", "resume_security")
+    workflow.add_edge("resume_security", "extract_candidate_profile")
     workflow.add_edge("extract_candidate_profile", "match_evidence")
     workflow.add_edge("match_evidence", "analyze_uncertainty")
     workflow.add_edge("analyze_uncertainty", "generate_interview_questions")

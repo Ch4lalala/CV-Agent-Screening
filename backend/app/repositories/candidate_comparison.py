@@ -27,6 +27,7 @@ def list_summaries(db: Session, *, job_id: int):
             ScreeningRun.id.label("run_id"),
             ScreeningRun.candidate_id.label("candidate_id"),
             ScreeningRun.finished_at.label("finished_at"),
+            ScreeningRun.security_status.label("security_status"),
             func.row_number()
             .over(
                 partition_by=ScreeningRun.candidate_id,
@@ -49,6 +50,7 @@ def list_summaries(db: Session, *, job_id: int):
             ranked_completed.c.run_id,
             ranked_completed.c.candidate_id,
             ranked_completed.c.finished_at,
+            ranked_completed.c.security_status,
         )
         .where(ranked_completed.c.run_number == 1)
         .subquery()
@@ -100,6 +102,7 @@ def list_summaries(db: Session, *, job_id: int):
             ResumeDocument.extraction_status.label("resume_extraction_status"),
             latest_completed.c.run_id.label("latest_completed_run_id"),
             latest_completed.c.finished_at.label("latest_completed_at"),
+            latest_completed.c.security_status.label("security_status"),
             active_run.id.label("active_screening_run_id"),
             active_run.current_stage.label("active_screening_stage"),
             active_run.current_stage_updated_at.label(
@@ -146,6 +149,7 @@ def list_summaries(db: Session, *, job_id: int):
             ResumeDocument.extraction_status,
             latest_completed.c.run_id,
             latest_completed.c.finished_at,
+            latest_completed.c.security_status,
             active_run.id,
             active_run.current_stage,
             active_run.current_stage_updated_at,

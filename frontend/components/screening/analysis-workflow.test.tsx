@@ -24,6 +24,9 @@ describe("AnalysisWorkflow", () => {
       screen.getByText("Extracting candidate profile").closest(".workflow-step"),
     ).toHaveClass("workflow-step-completed");
     expect(
+      screen.getByText("Checking resume security").closest(".workflow-step"),
+    ).toHaveClass("workflow-step-completed");
+    expect(
       screen.getByText("Matching resume evidence").closest(".workflow-step"),
     ).toHaveClass("workflow-step-current");
     expect(
@@ -50,7 +53,7 @@ describe("AnalysisWorkflow", () => {
     );
 
     expect(screen.getByRole("heading", { name: "Screening complete" })).toBeInTheDocument();
-    expect(screen.getAllByText("Completed")).toHaveLength(6);
+    expect(screen.getAllByText("Completed")).toHaveLength(7);
     await user.click(screen.getByRole("button", { name: "View candidate report" }));
     expect(viewReport).toHaveBeenCalledOnce();
 

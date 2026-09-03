@@ -19,11 +19,13 @@ The current MVP provides the lightweight application, secure document ingestion,
 - Normalized candidate profiles, evidence, citations, and interview questions
 - Latest-report, run-history, and specific-run APIs
 - Deterministic vacancy-level candidate comparison from normalized evidence rows
+- Hybrid deterministic and AI-assisted resume instruction detection before resume evaluation
+- Per-screening sanitized evaluation context and immutable security findings
 - Dashboard, job setup, requirement management, PDF upload, and candidate workflow
 - Evidence-first candidate reports with coverage, citations, verification flags, interview questions, profile context, and screening history
 - Dockerfiles and Docker Compose orchestration
 
-Authentication, Phase 8 prompt-injection detection, resume privacy filtering, GitHub verification, and autonomous hiring decisions are intentionally not part of this phase. Job-document prompts defensively treat source content as untrusted data, but this is not presented as prompt-injection detection. The UI never presents an overall candidate score or hiring recommendation; recruiters remain responsible for interpreting the evidence.
+Authentication, Phase 9 resume privacy filtering, GitHub verification, and autonomous hiring decisions are intentionally not part of this phase. The UI never presents an overall candidate score or hiring recommendation; recruiters remain responsible for interpreting the evidence.
 
 ## Prerequisites
 
@@ -200,12 +202,23 @@ A successful response includes `status`, `model`, and a short `message`. Missing
 
 Structured calls prefer native function calling. If an adapter does not implement it, or an OpenAI-compatible endpoint reports the native request shape as unsupported, the client makes one plain JSON request and validates that response with the same Pydantic schema. There are no repair loops.
 
+## Resume security checks
+
+Each screening treats the resume as untrusted document data. A deterministic pass detects explicit evaluator-directed instructions; only ambiguous instruction-like fragments use the centralized AI client and strict structured output. Legitimate phrases such as “Built an LLM prompt evaluation system” do not trigger deterministic warnings by themselves.
+
+Flagged fragments are removed surgically from a separate per-run evaluation context. `ResumeDocument.extracted_text` remains unchanged, while candidate extraction and evidence matching receive only `sanitized_resume_text`. Candidate and evidence prompts also repeat the untrusted-data boundary as defense in depth. If classification is unavailable, ambiguous fragments are conservatively excluded and the report shows **Security check unavailable** rather than claiming the resume is clean.
+
+Security flags belong to an immutable screening run and include category, severity, exact detected text, explanation, and exclusion status. Full flag detail is returned only in a candidate report. Candidate comparison returns only `security_status`; warnings do not change evidence-based review priority and never automatically reject a candidate.
+
+This feature is prompt-injection detection, not a guarantee of perfect protection.
+
 ## Core recruitment graph
 
-LangGraph runs inside the FastAPI backend; it is not a separate service. The Phase 5 graph executes:
+LangGraph runs inside the FastAPI backend; it is not a separate service. The current graph executes:
 
 ```text
 normalize_requirements
+  -> resume_security
   -> extract_candidate_profile
   -> match_evidence
   -> analyze_uncertainty
@@ -213,13 +226,13 @@ normalize_requirements
   -> generate_report
 ```
 
-The normal provider path has four batched model operations: one each for requirement normalization, candidate extraction, all requirement evidence, and targeted interview questions. The interview operation is skipped when there are no uncertainties, and evidence analysis is skipped when no requirements were produced. As documented above, an operation may make one compatibility fallback call if the provider rejects native structured output.
+The normal provider path has four batched model operations: one each for requirement normalization, candidate extraction, all requirement evidence, and targeted interview questions. The security stage is deterministic for obvious patterns and adds one structured classifier call only for ambiguous fragments. The interview operation is skipped when there are no uncertainties, and evidence analysis is skipped when no requirements were produced. As documented above, an operation may make one compatibility fallback call if the provider rejects native structured output.
 
 Recruiter-defined requirements remain authoritative. The response keeps the original recruiter name and description alongside any conservative normalization, and AI-derived requirements are accepted only when the job has no manual requirements.
 
 Evidence quotes are retained only when an exact equivalent exists in the extracted resume after conservative Unicode, whitespace, and case normalization with word boundaries. Unsupported quotes are discarded and the assessment is downgraded. Candidate-provided GitHub and portfolio URLs are retained only when they occur in the resume; they are not visited or verified.
 
-The graph treats resume content as untrusted data and explicitly instructs the model not to follow document instructions. Phase 5 does not claim prompt-injection detection; that remains a later phase.
+The graph treats resume content as untrusted data, detects and excludes suspicious instructions before resume-processing AI calls, and explicitly instructs each downstream model not to follow document instructions.
 
 Run and persist a screening with:
 
@@ -246,13 +259,14 @@ curl http://localhost:8000/api/v1/candidates/1/screenings/12
 
 Processing and failed runs return run metadata, including `current_stage` and `current_stage_updated_at`. A completed run returns the immutable evidence report with transparent required/preferred coverage, individual evidence assessments, uncertainty, and up to five targeted questions. It never returns a hiring recommendation or black-box match score.
 
-Screening sends the job data and extracted resume text to the configured external AI provider. The background task uses a separate database session and commits progress only after actual LangGraph node updates; it does not use fake percentages or timers. After the graph finishes, a short transaction persists the immutable report snapshot and normalized rows. Missing inputs return `404`, and an incomplete extraction or concurrent run returns `409`. Provider and graph failures are persisted as a sanitized failed run so the recruiter can retry.
+Screening sends job data and only the sanitized resume evaluation context to the configured external AI provider. The original extracted text remains internal for audit. The background task uses a separate database session and commits progress only after actual LangGraph node updates; it does not use fake percentages or timers. After the graph finishes, a short transaction persists the immutable report snapshot and normalized rows. Missing inputs return `404`, and an incomplete extraction or concurrent run returns `409`. Provider and graph failures are persisted as a sanitized failed run so the recruiter can retry.
 
 Persisted stages follow the graph without exposing internal labels in the UI:
 
 ```text
 queued
   -> normalize_requirements
+  -> resume_security
   -> extract_candidate_profile
   -> match_evidence
   -> analyze_uncertainty
@@ -352,8 +366,9 @@ The Alembic migrations create:
 - `evidence_results`
 - `evidence_items`
 - `interview_questions`
+- `security_flags`
 
-Jobs belong to users. Requirements and candidates belong to jobs. Each candidate has at most one current resume document and may have multiple screening runs. Each run owns one profile plus its evidence, citations, and interview questions. Foreign keys cascade screening data when a candidate is deleted; the resume file deletion flow remains in place. Deleting child screening records cannot delete their candidate, job, or user. Evidence links to recruiter requirements use `ON DELETE SET NULL`, preserving the historical requirement name and type if a requirement is later removed.
+Jobs belong to users. Requirements and candidates belong to jobs. Each candidate has at most one current resume document and may have multiple screening runs. Each run owns one profile plus its evidence, citations, interview questions, sanitized evaluation context, and security flags. Foreign keys cascade screening data when a candidate is deleted; the resume file deletion flow remains in place. Deleting child screening records cannot delete their candidate, job, or user. Evidence links to recruiter requirements use `ON DELETE SET NULL`, preserving the historical requirement name and type if a requirement is later removed.
 
 Allowed values are enforced in both Pydantic and the database:
 
@@ -362,7 +377,9 @@ Allowed values are enforced in both Pydantic and the database:
 - Candidate status: `uploaded`, `processing`, `completed`, `failed`
 - Resume extraction status: `pending`, `completed`, `failed`
 - Screening run status: `pending`, `processing`, `completed`, `failed`
-- Screening stage: `queued`, six graph-node stages, `completed`, `failed`
+- Screening stage: `queued`, seven graph-node stages, `completed`, `failed`
+- Resume security status: `clean`, `warning`, `unavailable`
+- Security severity: `low`, `medium`, `high`
 - Evidence status: `supported`, `partial`, `no_evidence`
 - Evidence confidence: `high`, `medium`, `low`
 
@@ -378,7 +395,7 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-Frontend interaction tests cover manual AI pre-population, recruiter edits, deletion, type changes, additions, confirmation, graceful AI fallback, upload, persisted screening progress, dismissal, completion/failure actions, processing-row recovery, comparison summaries, stable sorting, and Recommended for Review cards:
+Frontend interaction tests cover manual AI pre-population, recruiter edits, deletion, type changes, additions, confirmation, graceful AI fallback, upload, persisted screening progress (including resume security), dismissal, completion/failure actions, processing-row recovery, security report states, comparison summaries, stable sorting, and Recommended for Review cards:
 
 ```bash
 cd frontend

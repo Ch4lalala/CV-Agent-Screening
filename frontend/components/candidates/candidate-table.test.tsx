@@ -21,6 +21,7 @@ function candidate(
     resume_extraction_status: "completed",
     latest_completed_run_id: 10,
     latest_completed_at: "2026-09-02T00:00:10Z",
+    security_status: "clean",
     active_screening_run_id: null,
     active_screening_stage: null,
     active_screening_stage_updated_at: null,
@@ -67,6 +68,30 @@ describe("CandidateTable comparison and screening actions", () => {
     expect(unscreenedRow).not.toBeNull();
     expect(within(unscreenedRow!).getAllByText("—")).toHaveLength(3);
     expect(document.body.textContent).not.toMatch(/fit score|hire score|%/i);
+  });
+
+  it("shows a subtle security warning without changing recommended order", () => {
+    const warning = candidate({ security_status: "warning", review_priority: 1 });
+    const clean = candidate({
+      candidate_id: 8,
+      name: "Clean candidate",
+      security_status: "clean",
+      review_priority: 2,
+    });
+
+    render(
+      <CandidateTable
+        rows={[clean, warning]}
+        screeningCandidateId={null}
+        screeningErrors={{}}
+        onScreen={vi.fn()}
+        onViewProgress={vi.fn()}
+      />,
+    );
+
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(within(rows[0]).getByText("Budi")).toBeInTheDocument();
+    expect(within(rows[0]).getByText("Security warning")).toBeInTheDocument();
   });
 
   it("replaces Screen with View progress for an authoritative processing row", async () => {

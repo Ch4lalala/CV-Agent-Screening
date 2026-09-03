@@ -8,6 +8,7 @@ from app.agents.schemas import (
     InterviewQuestion,
     JobRequirementAI,
     RecruiterRequirement,
+    SecurityAnalysis,
     ScreeningReport,
 )
 
@@ -20,6 +21,8 @@ class RecruitmentState(TypedDict, total=False):
     existing_requirements: list[RecruiterRequirement]
     normalized_requirements: list[JobRequirementAI]
     resume_text: str
+    sanitized_resume_text: str
+    security: SecurityAnalysis
     candidate_profile: CandidateProfile
     evidence_results: list[EvidenceAssessment]
     supported_requirements: list[JobRequirementAI]

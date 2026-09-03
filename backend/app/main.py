@@ -1,3 +1,4 @@
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -11,15 +12,25 @@ from app.config import get_cors_origins
 from app.services.development_user import seed_development_user
 
 
+def _configure_application_logging() -> None:
+    application_logger = logging.getLogger("app")
+    server_logger = logging.getLogger("uvicorn.error")
+    if server_logger.handlers:
+        application_logger.handlers = server_logger.handlers
+        application_logger.propagate = False
+    application_logger.setLevel(logging.INFO)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    _configure_application_logging()
     seed_development_user()
     yield
 
 
 app = FastAPI(
     title="Evidence-Grounded Recruitment Agent API",
-    version="0.7.7",
+    version="0.8.0",
     lifespan=lifespan,
 )
 

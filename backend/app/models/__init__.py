@@ -7,6 +7,7 @@ from app.models.job import Job
 from app.models.job_requirement import JobRequirement
 from app.models.resume_document import ResumeDocument
 from app.models.screening_run import ScreeningRun
+from app.models.security_flag import SecurityFlag
 from app.models.user import User
 
 __all__ = [
@@ -19,5 +20,6 @@ __all__ = [
     "JobRequirement",
     "ResumeDocument",
     "ScreeningRun",
+    "SecurityFlag",
     "User",
 ]

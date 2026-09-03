@@ -1,6 +1,4 @@
 from datetime import datetime
-from typing import Literal
-
 from pydantic import BaseModel, ConfigDict
 
 from app.agents.schemas import CandidateProfile, CoverageSummary, JobRequirementAI
@@ -11,6 +9,9 @@ from app.models.enums import (
     RequirementType,
     ScreeningRunStatus,
     ScreeningStage,
+    SecurityFlagType,
+    SecuritySeverity,
+    SecurityStatus,
 )
 
 
@@ -28,6 +29,7 @@ class ScreeningRunResponse(ScreeningResponseModel):
     started_at: datetime | None
     finished_at: datetime | None
     error_message: str | None
+    security_status: SecurityStatus
     created_at: datetime
 
 
@@ -78,6 +80,23 @@ class InterviewQuestionResponse(ScreeningResponseModel):
     created_at: datetime
 
 
+class SecurityFlagResponse(ScreeningResponseModel):
+    id: int
+    flag_type: SecurityFlagType
+    severity: SecuritySeverity
+    detected_text: str
+    explanation: str
+    excluded_from_evaluation: bool
+    source_page: int | None
+    created_at: datetime
+
+
+class SecurityAnalysisResponse(BaseModel):
+    status: SecurityStatus
+    flag_count: int
+    flags: list[SecurityFlagResponse]
+
+
 class CandidateReportResponse(ScreeningResponseModel):
     screening_run: ScreeningRunResponse
     candidate: CandidateReportCandidateResponse
@@ -88,4 +107,4 @@ class CandidateReportResponse(ScreeningResponseModel):
     evidence_results: list[EvidenceResultResponse]
     needs_verification: list[str]
     interview_questions: list[InterviewQuestionResponse]
-    security_warning: Literal[None] = None
+    security: SecurityAnalysisResponse

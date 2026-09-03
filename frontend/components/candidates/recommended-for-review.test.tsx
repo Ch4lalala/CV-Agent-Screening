@@ -15,6 +15,7 @@ function prioritized(id: number, name: string, priority: number): CandidateCompa
     resume_extraction_status: "completed",
     latest_completed_run_id: id + 20,
     latest_completed_at: "2026-09-02T00:01:00Z",
+    security_status: "clean",
     active_screening_run_id: null,
     active_screening_stage: null,
     active_screening_stage_updated_at: null,

@@ -1,6 +1,6 @@
 """Deterministic, decision-free screening report assembly."""
 
-from app.agents.schemas import CoverageSummary, ScreeningReport
+from app.agents.schemas import CoverageSummary, SecurityAnalysis, ScreeningReport
 from app.agents.state import RecruitmentState
 
 
@@ -44,5 +44,9 @@ def build_screening_report(state: RecruitmentState) -> ScreeningReport:
             if item.needs_human_verification
         ],
         interview_questions=state["interview_questions"],
+        security=state.get(
+            "security",
+            SecurityAnalysis(status="unavailable", flags=[]),
+        ),
         security_warning=None,
     )
